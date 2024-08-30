@@ -1,4 +1,3 @@
-# /lib/x86_64-linux-gnu/libc.so.6: version `GLIBC_2.38' not found (required by ocserv)
 FROM openconnect-build:v1.3 AS builder
 
 FROM debian:12
@@ -25,13 +24,16 @@ ARG DEBIAN_FRONTEND=noninteractive
 RUN echo "deb http://deb.debian.org/debian sid main" >> /etc/apt/sources.list && \
     apt update && \
     apt install -y --no-install-recommends \
-        libllhttp9.1\ 
+        libllhttp9.1 \ 
         libtalloc2 \
         libradcli4 \
         liboath0 \
         libpcl1 \
         libev4 \
         libprotobuf-c1 \
+        libreadline8 \
+        libnl-route-3-200 \
+        less \
         gnutls-bin \
         iptables \
         iproute2 \
@@ -39,14 +41,13 @@ RUN echo "deb http://deb.debian.org/debian sid main" >> /etc/apt/sources.list &&
     mkdir /etc/ocserv/ && \
     apt autoremove --yes && \
     apt clean -y && \
-    rm -rf /var/lib/{apt,dpkg,cache,log}/
+    rm -rf /var/lib/{apt,dpkg,cache,log}/*
 
 COPY ./ocserv.sh /
 
 ENTRYPOINT ["/ocserv.sh"]
 
-CMD ["sleep", "999999"]
-# CMD ["ocserv", "--config", "/etc/ocserv/ocserv.conf", "--foreground"]
+CMD ["ocserv", "--config", "/etc/ocserv/ocserv.conf", "--foreground"]
 
-# HEALTHCHECK --interval=5m --timeout=3s \
-#   CMD  pidof -q ocserv-main || exit 1
+HEALTHCHECK --interval=5m --timeout=3s \
+  CMD  pidof -q ocserv-main || exit 1
