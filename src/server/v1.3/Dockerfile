@@ -33,6 +33,8 @@ RUN echo "deb http://deb.debian.org/debian sid main" >> /etc/apt/sources.list &&
         libprotobuf-c1 \
         libreadline8 \
         libnl-route-3-200 \
+        libcurl3-gnutls \
+        libcjose0 \
         less \
         gnutls-bin \
         iptables \
