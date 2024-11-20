@@ -52,4 +52,4 @@ ENTRYPOINT ["/ocserv.sh"]
 CMD ["ocserv", "--config", "/etc/ocserv/ocserv.conf", "--foreground"]
 
 HEALTHCHECK --interval=5m --timeout=3s \
-  CMD  pidof -q ocserv-main || exit 1
+  CMD  pidof -q ocserv || exit 1
