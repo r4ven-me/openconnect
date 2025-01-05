@@ -1,0 +1,55 @@
+---
+
+networks:
+
+  vpn:
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.22.22.0/24
+          gateway: 172.22.22.1
+
+services:
+
+  certbot:
+    image: certbot/certbot
+    container_name: certbot
+    hostname: certbot
+    env_file:
+      - .env
+    volumes:
+      - ./data/ssl:/etc/letsencrypt
+    ports:
+      - 80:80
+    command: certonly --non-interactive --keep-until-expiring --standalone --preferred-challenges http --agree-tos --email ${USER_EMAIL} -d ${SRV_CN}
+
+  openconnect:
+    depends_on:
+      certbot:
+        condition: service_completed_successfully
+    build: .
+    image: r4venme/openconnect:sid
+    container_name: openconnect
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 200M
+    cap_add:
+      - NET_ADMIN
+    hostname: openconnect
+    env_file:
+      - .env
+    volumes:
+      - ./data:/etc/ocserv
+      #- /etc/passwd:/etc/passwd:ro
+      #- /etc/group:/etc/group:ro
+      #- /etc/shadow:/etc/shadow:ro
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    ports:
+      - ${SRV_PORT}:443/tcp
+    networks:
+      vpn:
+        ipv4_address: 172.22.22.22
