@@ -28,7 +28,8 @@ services:
       certbot:
         condition: service_completed_successfully
     build: .
-    image: r4venme/openconnect:sid
+    image: openconnect
+    #image: r4venme/openconnect:v1.3-sid
     container_name: openconnect
     restart: unless-stopped
     deploy:
