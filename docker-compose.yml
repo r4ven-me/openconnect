@@ -1,4 +1,4 @@
-version: '3'
+---
 
 services:
 
@@ -16,9 +16,9 @@ services:
     # depends_on:
     #   certbot:
     #     condition: service_completed_successfully
-    image: r4venme/openconnect:v1.1
+    image: r4venme/openconnect:v1.3-sid
     container_name: openconnect
-    restart: unless-stopped
+    restart: on-failure
     deploy:
       resources:
         limits:
@@ -31,8 +31,20 @@ services:
       - TZ="Europe/Moscow"
       - SRV_CN=example.com
       - SRV_CA="Example CA"
+      #- OTP_ENABLE="true"
+      #- OTP_SEND_BY_EMAIL="true"
+      #- MSMTP_HOST="smtp.example.com"
+      #- MSMTP_PORT="465"
+      #- MSMTP_USER="mail@example.com"
+      #- MSMTP_PASSWORD="SuPeRsEcReTpAsSwOrD"
+      #- MSMTP_FROM="mail@example.com"
+      #- OTP_SEND_BY_TELEGRAM="true"
+      #- TG_TOKEN="1234567890:QWERTYuio-PA1DFGHJ2_KlzxcVBNmqWEr3t"
     volumes:
       - ./data:/etc/ocserv
+      #- /etc/passwd:/etc/passwd:ro
+      #- /etc/group:/etc/group:ro
+      #- /etc/shadow:/etc/shadow:ro
     devices:
       - /dev/net/tun:/dev/net/tun
     ports:
