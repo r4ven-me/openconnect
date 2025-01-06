@@ -1,0 +1,32 @@
+FROM debian:12
+
+LABEL maintainer="Ivan Cherniy <kar-kar@r4ven.me>"
+
+ARG DEBIAN_FRONTEND=noninteractive
+
+SHELL ["/bin/bash", "-Eeuo", "pipefail", "-c"]
+
+RUN echo "deb http://deb.debian.org/debian sid main" >> /etc/apt/sources.list && \
+    apt update && \
+    apt upgrade -y && \
+    apt install --yes curl build-essential fakeroot devscripts \
+        iputils-ping ruby-ronn openconnect libuid-wrapper \
+        libnss-wrapper libsocket-wrapper gss-ntlmssp git-core make autoconf \
+        libtool autopoint gettext automake nettle-dev libwrap0-dev \
+        libpam0g-dev liblz4-dev libseccomp-dev libreadline-dev libnl-route-3-dev \
+        libkrb5-dev liboath-dev libradcli-dev libprotobuf-dev libtalloc-dev \
+        libhttp-parser-dev libpcl1-dev protobuf-c-compiler gperf liblockfile-bin \
+        nuttcp libpam-oath libev-dev libgnutls28-dev gnutls-bin haproxy \
+        yajl-tools libcurl4-gnutls-dev libcjose-dev libjansson-dev libssl-dev \
+        iproute2 libpam-wrapper tcpdump libopenconnect-dev iperf3 ipcalc-ng \
+        freeradius libfreeradius-dev &&\
+    curl -fLO https://www.infradead.org/ocserv/download/ocserv-1.3.0.tar.xz && \
+    tar -xvf ./ocserv-1.3.0.tar.xz && \
+    cd ./ocserv-1.3.0/ && \
+    ./configure --enable-oidc-auth && make && \
+    mkdir /usr/share/doc/ocserv/ && \
+    cp ./doc/sample.config /usr/share/doc/ocserv/
+
+WORKDIR /ocserv-1.3.0
+
+CMD [ "sleep", "999999" ]

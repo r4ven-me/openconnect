@@ -1,0 +1,15 @@
+[Unit]
+Description=OpenConnect VPN Client
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+PrivateTmp=true
+ExecStart=/path/to/occlient.sh
+KillSignal=SIGINT
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
