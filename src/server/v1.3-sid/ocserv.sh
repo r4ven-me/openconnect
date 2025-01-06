@@ -266,7 +266,7 @@ if [[ \$# -eq 1 ]]; then
         echo "TOTP secret in png image saved at: \${SECRETS_DIR}/otp_\${USER_ID}.png"
 
         send_qr_by_email() {
-            EMAIL_REGEX="^[a-zA-Z0-9._-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$"
+            EMAIL_REGEX="^[a-zA-Z0-9._-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$"
 
             if [[ \$USER_ID =~ \$EMAIL_REGEX ]]; then
                 cat << EOF | msmtp --file="\${SCRIPTS_DIR}"/msmtprc "\$USER_ID"
@@ -297,15 +297,17 @@ EOF
         if [[ "\$OTP_SEND_BY_EMAIL" == "true" ]]; then send_qr_by_email; fi
 
         send_qr_by_telegram() {
-            if [[ -e "\${SECRETS_DIR}"/users.oath ]] && grep -qP "(?<!\\S)\${USER_ID}(?!\\S)" "\${SECRETS_DIR}"/users.oath; then
+            TG_REGEX="^[a-zA-Z][a-zA-Z0-9_]{4,31}\$"
+
+            if [[ \$USER_ID =~ \$TG_REGEX ]]; then
                 TG_MESSAGE="TOTP secret for OpenConnect (base32):
 \$OTP_SECRET_BASE32"
                 TG_USER_FILE="\${SCRIPTS_DIR}/tg_users.txt"
-                TG_RESPONSE="\$(curl -s "https://api.telegram.org/bot\$TG_TOKEN/getUpdates")"
                 
                 if grep -qP "(?<!\\S)\${USER_ID}(?!\\S)" "\$TG_USER_FILE" 2> /dev/null; then
                     TG_CHAT_ID=\$(grep -P "(?<!\\S)\${USER_ID}(?!\\S)" "\$TG_USER_FILE" | awk '{print \$1}')
                 else
+                    TG_RESPONSE="\$(curl -s "https://api.telegram.org/bot\$TG_TOKEN/getUpdates")"
                     TG_CHAT_ID=\$(echo "\$TG_RESPONSE" | jq -r --arg USERNAME "\$USER_ID" '.result[] | select(.message.from.username == \$USERNAME) | .message.chat.id')
 
                     if [[ -z "\$TG_CHAT_ID" ]]; then
@@ -354,29 +356,30 @@ TG_TOKEN="$TG_TOKEN"
 echo "[\$(date '+%F %T')] - PAM user \$PAM_USER is trying to connect to ocserv" >> "\${OCSERV_DIR}"/pam.log
 
 otp_sender_by_email() {
-   if [[ -e "\${SECRETS_DIR}"/users.oath ]] && grep -qP "(?<!\\S)\${PAM_USER}(?!\\S)" "\${SECRETS_DIR}"/users.oath; then
-        OTP_TOKEN="\$(oathtool --totp \$(grep -P "(?<!\\S)\${PAM_USER}(?!\\S)" \${SECRETS_DIR}/users.oath | awk '{print \$4}'))"
-        EMAIL_REGEX="^[a-zA-Z0-9._-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$"
+    EMAIL_REGEX="^[a-zA-Z0-9._-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$"
+    if [[ \$PAM_USER =~ \$EMAIL_REGEX ]]; then true; else return 0; fi
 
-        if [[ \$PAM_USER =~ \$EMAIL_REGEX ]]; then
-            echo -e "Subject: TOTP token for OpenConnect\n\n\${OTP_TOKEN}" | msmtp --file="\${SCRIPTS_DIR}"/msmtprc "\$PAM_USER"
-            echo "[\$(date '+%F %T')] - TOTP token successfully sent to \$PAM_USER" >> "\${OCSERV_DIR}"/pam.log
-        else
-            return 0
-        fi
-   fi
+    if [[ -e "\${SECRETS_DIR}"/users.oath ]] && grep -qP "(?<!\\S)\${PAM_USER}(?!\\S)" "\${SECRETS_DIR}"/users.oath; then
+        OTP_TOKEN="\$(oathtool --totp \$(grep -P "(?<!\\S)\${PAM_USER}(?!\\S)" \${SECRETS_DIR}/users.oath | awk '{print \$4}'))"
+
+        echo -e "Subject: TOTP token for OpenConnect\n\n\${OTP_TOKEN}" | msmtp --file="\${SCRIPTS_DIR}"/msmtprc "\$PAM_USER"
+        echo "[\$(date '+%F %T')] - TOTP token successfully sent to \$PAM_USER" >> "\${OCSERV_DIR}"/pam.log
+    fi
 }
 
 otp_sender_by_telegram() {
+    TG_REGEX="^[a-zA-Z][a-zA-Z0-9_]{4,31}\$"
+    if [[ \$PAM_USER =~ \$TG_REGEX ]]; then true; else return 0; fi
+
     if grep -qP "(?<!\\S)\${PAM_USER}(?!\\S)" "\${SECRETS_DIR}"/users.oath 2> /dev/null; then
         OTP_TOKEN="\$(oathtool --totp \$(grep -P "(?<!\\S)\${PAM_USER}(?!\\S)" \${SECRETS_DIR}/users.oath | awk '{print \$4}'))"
         TG_MESSAGE="TOTP token for OpenConnect: \$OTP_TOKEN"
         TG_USER_FILE="\${SCRIPTS_DIR}/tg_users.txt"
-        TG_RESPONSE="\$(curl -s "https://api.telegram.org/bot\$TG_TOKEN/getUpdates")"
         
         if grep -qP "(?<!\\S)\$PAM_USER(?!\\S)" "\$TG_USER_FILE"; then
             TG_CHAT_ID=\$(grep -P "(?<!\\S)\${PAM_USER}(?!\\S)" "\$TG_USER_FILE" | awk '{print \$1}')
         else
+            TG_RESPONSE="\$(curl -s "https://api.telegram.org/bot\$TG_TOKEN/getUpdates")"
             TG_CHAT_ID=\$(echo "\$TG_RESPONSE" | jq -r --arg USERNAME "\$PAM_USER" '.result[] | select(.message.from.username == \$USERNAME) | .message.chat.id')
     
             if [[ -z "\$TG_CHAT_ID" ]]; then
