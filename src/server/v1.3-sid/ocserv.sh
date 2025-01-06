@@ -319,15 +319,15 @@ EOF
                     fi
                     echo "\$TG_CHAT_ID \$USER_ID" >> "\$TG_USER_FILE"
                 fi
+
+                curl -s -X POST "https://api.telegram.org/bot\$TG_TOKEN/sendPhoto" \\
+                    -H "Content-Type: multipart/form-data" \\
+                    -F "chat_id=\$TG_CHAT_ID" \\
+                    -F "photo=@\${SECRETS_DIR}/otp_\${USER_ID}.png" \\
+                    -F "caption=\$TG_MESSAGE" > /dev/null 2>> "\${OCSERV_DIR}"/pam.log
+
+                echo "[\$(date '+%F %T')] - TOTP secret and QR code successfully sent to \$USER_ID via Telegram" | tee -a "\${OCSERV_DIR}"/pam.log
             fi
-
-            curl -s -X POST "https://api.telegram.org/bot\$TG_TOKEN/sendPhoto" \\
-                -H "Content-Type: multipart/form-data" \\
-                -F "chat_id=\$TG_CHAT_ID" \\
-                -F "photo=@\${SECRETS_DIR}/otp_\${USER_ID}.png" \\
-                -F "caption=\$TG_MESSAGE" > /dev/null 2>> "\${OCSERV_DIR}"/pam.log
-
-            echo "[\$(date '+%F %T')] - TOTP secret and QR code successfully sent to \$USER_ID via Telegram" | tee -a "\${OCSERV_DIR}"/pam.log
         }
 
         if [[ "\$OTP_SEND_BY_TELEGRAM" == "true" ]]; then send_qr_by_telegram; fi
