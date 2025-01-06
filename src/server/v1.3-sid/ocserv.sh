@@ -21,10 +21,10 @@ OCSERV_DIR="/etc/ocserv"
 CERTS_DIR="${OCSERV_DIR}/certs"
 SSL_DIR="${OCSERV_DIR}/ssl"
 SECRETS_DIR="${OCSERV_DIR}/secrets"
-BIN_DIR="${OCSERV_DIR}/bin"
+SCRIPTS_DIR="${OCSERV_DIR}/scripts"
 
 # Create certs dirs
-for sub_dir in "${OCSERV_DIR}"/{"ssl/live/${SRV_CN}","certs","secrets","bin"}; do
+for sub_dir in "${OCSERV_DIR}"/{"ssl/live/${SRV_CN}","certs","secrets","scripts"}; do
     if [[ ! -d "$sub_dir" ]]; then
         mkdir -p "$sub_dir"
     fi
@@ -67,8 +67,8 @@ cookie-timeout = 600
 deny-roaming = false
 rekey-time = 172800
 rekey-method = ssl
-connect-script = ${BIN_DIR}/connect
-disconnect-script = ${BIN_DIR}/disconnect
+connect-script = ${SCRIPTS_DIR}/connect
+disconnect-script = ${SCRIPTS_DIR}/disconnect
 use-occtl = true
 pid-file = /run/ocserv.pid
 log-level = 1
@@ -137,8 +137,8 @@ _EOF_
 fi
 
 # Create connect script which runs for every user connection
-if [[ ! -e "${BIN_DIR}"/connect ]]; then
-cat << _EOF_ > "${BIN_DIR}"/connect && chmod +x "${BIN_DIR}"/connect
+if [[ ! -e "${SCRIPTS_DIR}"/connect ]]; then
+cat << _EOF_ > "${SCRIPTS_DIR}"/connect && chmod +x "${SCRIPTS_DIR}"/connect
 #!/bin/bash
 
 set -Eeuo pipefail
@@ -150,8 +150,8 @@ _EOF_
 fi
 
 # Create disconnect script which runs for every user disconnection
-if [[ ! -e "${BIN_DIR}"/disconnect ]]; then
-cat << _EOF_ > "${BIN_DIR}"/disconnect && chmod +x "${BIN_DIR}"/disconnect
+if [[ ! -e "${SCRIPTS_DIR}"/disconnect ]]; then
+cat << _EOF_ > "${SCRIPTS_DIR}"/disconnect && chmod +x "${SCRIPTS_DIR}"/disconnect
 #!/bin/bash
 
 set -Eeuo pipefail
@@ -162,8 +162,8 @@ _EOF_
 fi
 
 # Create script to create new users
-if [[ ! -e "${BIN_DIR}"/ocuser ]]; then
-cat << _EOF_ > "${BIN_DIR}"/ocuser && chmod +x "${BIN_DIR}"/ocuser
+if [[ ! -e "${SCRIPTS_DIR}"/ocuser ]]; then
+cat << _EOF_ > "${SCRIPTS_DIR}"/ocuser && chmod +x "${SCRIPTS_DIR}"/ocuser
 #!/bin/bash
 
 set -Eeuo pipefail
@@ -202,8 +202,8 @@ _EOF_
 fi
 
 # Add revoke script
-if [[ ! -e "${BIN_DIR}"/ocrevoke ]]; then
-cat << _EOF_ > "${BIN_DIR}"/ocrevoke && chmod +x "${BIN_DIR}"/ocrevoke
+if [[ ! -e "${SCRIPTS_DIR}"/ocrevoke ]]; then
+cat << _EOF_ > "${SCRIPTS_DIR}"/ocrevoke && chmod +x "${SCRIPTS_DIR}"/ocrevoke
 #!/bin/bash
 
 set -Eeuo pipefail
@@ -244,8 +244,8 @@ _EOF_
 fi
 
 # Add ocuser2fa script
-if [[ "$OTP_ENABLE" == "true" && ! -e "${BIN_DIR}"/ocuser2fa ]]; then
-cat << _EOF_ > "${BIN_DIR}"/ocuser2fa && chmod +x "${BIN_DIR}"/ocuser2fa
+if [[ "$OTP_ENABLE" == "true" && ! -e "${SCRIPTS_DIR}"/ocuser2fa ]]; then
+cat << _EOF_ > "${SCRIPTS_DIR}"/ocuser2fa && chmod +x "${SCRIPTS_DIR}"/ocuser2fa
 #!/bin/bash
 
 set -Eeuo pipefail
@@ -269,7 +269,7 @@ if [[ \$# -eq 1 ]]; then
             EMAIL_REGEX="^[a-zA-Z0-9._-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$"
 
             if [[ \$USER_ID =~ \$EMAIL_REGEX ]]; then
-                cat << EOF | msmtp --file="\${BIN_DIR}"/msmtprc "\$USER_ID"
+                cat << EOF | msmtp --file="\${SCRIPTS_DIR}"/msmtprc "\$USER_ID"
 Subject: TOTP QR code for OpenConnect auth
 MIME-Version: 1.0
 Content-Type: multipart/mixed; boundary="boundary"
@@ -300,7 +300,7 @@ EOF
             if [[ -e "\${SECRETS_DIR}"/users.oath ]] && grep -qP "(?<!\\S)\${USER_ID}(?!\\S)" "\${SECRETS_DIR}"/users.oath; then
                 TG_MESSAGE="TOTP secret for OpenConnect (base32):
 \$OTP_SECRET_BASE32"
-                TG_USER_FILE="\${BIN_DIR}/tg_users.txt"
+                TG_USER_FILE="\${SCRIPTS_DIR}/tg_users.txt"
                 TG_RESPONSE="\$(curl -s "https://api.telegram.org/bot\$TG_TOKEN/getUpdates")"
                 
                 if grep -qP "(?<!\\S)\${USER_ID}(?!\\S)" "\$TG_USER_FILE" 2> /dev/null; then
@@ -338,15 +338,15 @@ fi
 _EOF_
 fi
 
-if [[ "$OTP_ENABLE" == "true" && ! -e "${BIN_DIR}"/otp_sender ]]; then
-cat << _EOF_ > "${BIN_DIR}"/otp_sender && chmod +x "${BIN_DIR}"/otp_sender
+if [[ "$OTP_ENABLE" == "true" && ! -e "${SCRIPTS_DIR}"/otp_sender ]]; then
+cat << _EOF_ > "${SCRIPTS_DIR}"/otp_sender && chmod +x "${SCRIPTS_DIR}"/otp_sender
 #!/bin/bash
 
 set -Eeuo pipefail
 
 OCSERV_DIR="$OCSERV_DIR"
 SECRETS_DIR="$SECRETS_DIR"
-BIN_DIR="$BIN_DIR"
+SCRIPTS_DIR="$SCRIPTS_DIR"
 OTP_SEND_BY_EMAIL="$OTP_SEND_BY_EMAIL"
 OTP_SEND_BY_TELEGRAM="$OTP_SEND_BY_TELEGRAM"
 TG_TOKEN="$TG_TOKEN"
@@ -359,7 +359,7 @@ otp_sender_by_email() {
         EMAIL_REGEX="^[a-zA-Z0-9._-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$"
 
         if [[ \$PAM_USER =~ \$EMAIL_REGEX ]]; then
-            echo -e "Subject: TOTP token for OpenConnect\n\n\${OTP_TOKEN}" | msmtp --file="\${BIN_DIR}"/msmtprc "\$PAM_USER"
+            echo -e "Subject: TOTP token for OpenConnect\n\n\${OTP_TOKEN}" | msmtp --file="\${SCRIPTS_DIR}"/msmtprc "\$PAM_USER"
             echo "[\$(date '+%F %T')] - TOTP token successfully sent to \$PAM_USER" >> "\${OCSERV_DIR}"/pam.log
         else
             return 0
@@ -371,7 +371,7 @@ otp_sender_by_telegram() {
     if grep -qP "(?<!\\S)\${PAM_USER}(?!\\S)" "\${SECRETS_DIR}"/users.oath 2> /dev/null; then
         OTP_TOKEN="\$(oathtool --totp \$(grep -P "(?<!\\S)\${PAM_USER}(?!\\S)" \${SECRETS_DIR}/users.oath | awk '{print \$4}'))"
         TG_MESSAGE="TOTP token for OpenConnect: \$OTP_TOKEN"
-        TG_USER_FILE="\${BIN_DIR}/tg_users.txt"
+        TG_USER_FILE="\${SCRIPTS_DIR}/tg_users.txt"
         TG_RESPONSE="\$(curl -s "https://api.telegram.org/bot\$TG_TOKEN/getUpdates")"
         
         if grep -qP "(?<!\\S)\$PAM_USER(?!\\S)" "\$TG_USER_FILE"; then
@@ -395,11 +395,18 @@ if [[ "\$OTP_SEND_BY_EMAIL" == "true" ]]; then otp_sender_by_email; fi &
 
 if [[ "\$OTP_SEND_BY_TELEGRAM" == "true" ]]; then otp_sender_by_telegram; fi &
 _EOF_
+elif [[ "$OTP_ENABLE" == "true" && -e "${SCRIPTS_DIR}"/otp_sender ]]; then
+    sed -i "s|OCSERV_DIR=.*|OCSERV_DIR=\"$OCSERV_DIR\"|" "${SCRIPTS_DIR}"/otp_sender
+    sed -i "s|SECRETS_DIR=.*|SECRETS_DIR=\"$SECRETS_DIR\"|" "${SCRIPTS_DIR}"/otp_sender
+    sed -i "s|SCRIPTS_DIR=.*|SCRIPTS_DIR=\"$SCRIPTS_DIR\"|" "${SCRIPTS_DIR}"/otp_sender
+    sed -i "s|OTP_SEND_BY_EMAIL=.*|OTP_SEND_BY_EMAIL=\"$OTP_SEND_BY_EMAIL\"|" "${SCRIPTS_DIR}"/otp_sender
+    sed -i "s|OTP_SEND_BY_TELEGRAM=.*|OTP_SEND_BY_TELEGRAM=\"$OTP_SEND_BY_TELEGRAM\"|" "${SCRIPTS_DIR}"/otp_sender
+    sed -i "s|TG_TOKEN=.*|TG_TOKEN=\"$TG_TOKEN\"|" "${SCRIPTS_DIR}"/otp_sender
 fi
 
 # Add msmtprc config
-if [[ "$OTP_ENABLE" == "true" && ! -e "${OCSERV_DIR}"/msmtprc ]]; then
-cat << _EOF_ > "${BIN_DIR}"/msmtprc && chmod 400 "${BIN_DIR}"/msmtprc
+if [[ "$OTP_ENABLE" == "true" && "$OTP_SEND_BY_EMAIL" == "true" && ! -e "${OCSERV_DIR}"/msmtprc ]]; then
+cat << _EOF_ > "${SCRIPTS_DIR}"/msmtprc && chmod 400 "${SCRIPTS_DIR}"/msmtprc
 account default
 host $MSMTP_HOST
 port $MSMTP_PORT
@@ -419,7 +426,7 @@ pam_otp() {
         until [[ -e /etc/pam.d/ocserv ]]; do sleep 5; done
         if grep -q 'otp_sender' /etc/pam.d/ocserv && grep -q 'users.oath' /etc/pam.d/ocserv; then return 0; fi
         sleep 3
-        echo "auth optional pam_exec.so ${BIN_DIR}/otp_sender" >> /etc/pam.d/ocserv
+        echo "auth optional pam_exec.so ${SCRIPTS_DIR}/otp_sender" >> /etc/pam.d/ocserv
         echo "auth requisite pam_oath.so debug usersfile=${SECRETS_DIR}/users.oath window=20" >> /etc/pam.d/ocserv
     fi
 }
