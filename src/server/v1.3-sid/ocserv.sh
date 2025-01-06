@@ -39,7 +39,7 @@ if [[ ! -e "${OCSERV_DIR}"/ocserv.conf ]]; then
 cat << _EOF_ > "${OCSERV_DIR}"/ocserv.conf
 auth = "certificate"
 #auth = "plain[passwd=${OCSERV_DIR}/ocpasswd]"
-#auth = "plain[passwd=/etc/ocserv/passwd,otp=/etc/ocserv/secrets/users.oath]"
+#auth = "plain[passwd=/etc/ocserv/ocpasswd,otp=/etc/ocserv/secrets/users.oath]"
 #enable-auth = "certificate"
 #enable-auth = "pam"
 tcp-port = 443
@@ -85,6 +85,9 @@ cisco-client-compat = true
 dtls-legacy = true
 client-bypass-protocol = false
 crl = /etc/ocserv/certs/crl.pem
+#camouflage = true
+#camouflage_secret = "secretword"
+#camouflage_realm = "Welcome to admin panel"
 _EOF_
 fi
 
@@ -254,7 +257,7 @@ if [[ \$# -eq 1 ]]; then
     USER_ID="\$1"
     OTP_SECRET="\$(head -c 16 /dev/urandom | xxd -c 256 -ps)"
     OTP_SECRET_BASE32="\$(echo 0x"\${OTP_SECRET}" | xxd -r -c 256 | base32)"
-    OTP_SECRET_QR="otpauth://totp/\$USER_ID?secret=\$OTP_SECRET_BASE32&issuer=$SRV_CA&counter=1"
+    OTP_SECRET_QR="otpauth://totp/\$USER_ID?secret=\$OTP_SECRET_BASE32&issuer=$SRV_CA&algorithm=SHA1&digits=6&period=30"
 
     if [[ ! -e "\${SECRETS_DIR}"/users.oath ]] || ! grep -qP "(?<!\\S)\${USER_ID}(?!\\S)" "\${SECRETS_DIR}"/users.oath; then
         echo "HOTP/T30 \$USER_ID - \$OTP_SECRET" >> "\${SECRETS_DIR}"/users.oath
@@ -360,7 +363,7 @@ otp_sender_by_email() {
     if [[ \$PAM_USER =~ \$EMAIL_REGEX ]]; then true; else return 0; fi
 
     if [[ -e "\${SECRETS_DIR}"/users.oath ]] && grep -qP "(?<!\\S)\${PAM_USER}(?!\\S)" "\${SECRETS_DIR}"/users.oath; then
-        OTP_TOKEN="\$(oathtool --totp \$(grep -P "(?<!\\S)\${PAM_USER}(?!\\S)" \${SECRETS_DIR}/users.oath | awk '{print \$4}'))"
+        OTP_TOKEN="\$(oathtool --totp=SHA1 --time-step-size=30 --digits=6 \$(grep -P "(?<!\\S)\${PAM_USER}(?!\\S)" \${SECRETS_DIR}/users.oath | awk '{print \$4}'))"
 
         echo -e "Subject: TOTP token for OpenConnect\n\n\${OTP_TOKEN}" | msmtp --file="\${SCRIPTS_DIR}"/msmtprc "\$PAM_USER"
         echo "[\$(date '+%F %T')] - TOTP token successfully sent to \$PAM_USER" >> "\${OCSERV_DIR}"/pam.log
@@ -372,7 +375,7 @@ otp_sender_by_telegram() {
     if [[ \$PAM_USER =~ \$TG_REGEX ]]; then true; else return 0; fi
 
     if grep -qP "(?<!\\S)\${PAM_USER}(?!\\S)" "\${SECRETS_DIR}"/users.oath 2> /dev/null; then
-        OTP_TOKEN="\$(oathtool --totp \$(grep -P "(?<!\\S)\${PAM_USER}(?!\\S)" \${SECRETS_DIR}/users.oath | awk '{print \$4}'))"
+        OTP_TOKEN="\$(oathtool --totp=SHA1 --time-step-size=30 --digits=6 \$(grep -P "(?<!\\S)\${PAM_USER}(?!\\S)" \${SECRETS_DIR}/users.oath | awk '{print \$4}'))"
         TG_MESSAGE="TOTP token for OpenConnect: \$OTP_TOKEN"
         TG_USER_FILE="\${SCRIPTS_DIR}/tg_users.txt"
         
