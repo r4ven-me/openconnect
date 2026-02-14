@@ -24,7 +24,7 @@ ARG DEBIAN_FRONTEND=noninteractive
 RUN echo "deb http://deb.debian.org/debian sid main" >> /etc/apt/sources.list && \
     apt update && \
     apt install -y --no-install-recommends \
-        libllhttp9.1 \ 
+        libllhttp9.2 \
         libtalloc2 \
         libradcli4 \
         liboath0 \
