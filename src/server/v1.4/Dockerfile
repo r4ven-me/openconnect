@@ -1,4 +1,41 @@
-FROM openconnect-build:v1.4 AS builder
+# ========STAGE 1: BUILD========
+
+FROM debian:13 AS builder
+
+ENV OCSERV_VERSION="1.4.0"
+ENV DEBIAN_VERSION="13"
+ENV DEBIAN_VERSION_ID="trixie"
+
+LABEL maintainer="Ivan Cherniy <kar-kar@r4ven.me>"
+
+ARG DEBIAN_FRONTEND=noninteractive
+
+SHELL ["/bin/bash", "-Eeuo", "pipefail", "-c"]
+
+RUN echo "deb http://deb.debian.org/debian ${DEBIAN_VERSION_ID} main" >> /etc/apt/sources.list && \
+    apt update && \
+    apt upgrade --yes && \
+    apt install --yes curl build-essential pkg-config fakeroot devscripts \
+        iputils-ping ruby-ronn openconnect libuid-wrapper \
+        libnss-wrapper libsocket-wrapper gss-ntlmssp git-core make autoconf \
+        libtool autopoint gettext automake nettle-dev libwrap0-dev \
+        libpam0g-dev liblz4-dev libseccomp-dev libreadline-dev libnl-route-3-dev \
+        libkrb5-dev liboath-dev libradcli-dev libprotobuf-c-dev libtalloc-dev libllhttp-dev \
+        libhttp-parser-dev protobuf-c-compiler gperf liblockfile-bin \
+        nuttcp libpam-oath libev-dev libgnutls28-dev gnutls-bin haproxy \
+        yajl-tools libcurl4-gnutls-dev libcjose-dev libjansson-dev libssl-dev \
+        iproute2 libpam-wrapper tcpdump libopenconnect-dev iperf3 lcov ipcalc \
+        freeradius libfreeradius-dev gawk jq &&\
+    curl -fLO https://www.infradead.org/ocserv/download/ocserv-"${OCSERV_VERSION}".tar.xz && \
+    tar -xvf ./ocserv-"${OCSERV_VERSION}".tar.xz && \
+    cd ./ocserv-"${OCSERV_VERSION}"/ && \
+    ./configure --enable-oidc-auth && make && \
+    mkdir /usr/share/doc/ocserv/ && \
+    cp ./doc/sample.config /usr/share/doc/ocserv/
+
+WORKDIR /ocserv-"${OCSERV_VERSION}"
+
+# ========SATGE 2: RUNTIME========
 
 FROM debian:13
 

@@ -23,12 +23,6 @@ services:
   #     - 80:80
   #   command: certonly --non-interactive --keep-until-expiring --standalone --preferred-challenges http --agree-tos --email ${USER_EMAIL} -d ${SRV_CN}
 
-  openconnect-build:
-    build:
-      context: .
-      dockerfile: Dockerfile_build
-    image: openconnect-build:v1.4
-
   openconnect:
     # depends_on:
     #   certbot:
@@ -36,7 +30,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: openconnect
+    image: openconnect:v1.4
     #image: r4venme/openconnect:v1.4
     container_name: openconnect
     restart: unless-stopped
