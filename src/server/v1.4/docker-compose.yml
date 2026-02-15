@@ -11,25 +11,33 @@ networks:
 
 services:
 
-  certbot:
-    image: certbot/certbot
-    container_name: certbot
-    hostname: certbot
-    env_file:
-      - .env
-    volumes:
-      - ./data/ssl:/etc/letsencrypt
-    ports:
-      - 80:80
-    command: certonly --non-interactive --keep-until-expiring --standalone --preferred-challenges http --agree-tos --email ${USER_EMAIL} -d ${SRV_CN}
+  # certbot:
+  #   image: certbot/certbot
+  #   container_name: certbot
+  #   hostname: certbot
+  #   env_file:
+  #     - .env
+  #   volumes:
+  #     - ./data/ssl:/etc/letsencrypt
+  #   ports:
+  #     - 80:80
+  #   command: certonly --non-interactive --keep-until-expiring --standalone --preferred-challenges http --agree-tos --email ${USER_EMAIL} -d ${SRV_CN}
+
+  openconnect-build:
+    build:
+      context: .
+      dockerfile: Dockerfile_build
+    image: openconnect-build:v1.4
 
   openconnect:
-    depends_on:
-      certbot:
-        condition: service_completed_successfully
-    build: .
+    # depends_on:
+    #   certbot:
+    #     condition: service_completed_successfully
+    build:
+      context: .
+      dockerfile: Dockerfile
     image: openconnect
-    #image: r4venme/openconnect:v1.3-sid
+    #image: r4venme/openconnect:v1.4
     container_name: openconnect
     restart: unless-stopped
     deploy:

@@ -33,4 +33,4 @@ RUN echo "deb http://deb.debian.org/debian ${DEBIAN_VERSION_ID} main" >> /etc/ap
 
 WORKDIR /ocserv-"${OCSERV_VERSION}"
 
-CMD [ "sleep", "999999" ]
+# CMD [ "sleep", "999999" ]
