@@ -1,4 +1,4 @@
-## How to use docker image with openconnect server 1.4 and middle server functional
+## How to build docker image with openconnect server 1.4 with client
 
 ```bash
 git clone https://github.com/r4ven-me/openconnect /tmp

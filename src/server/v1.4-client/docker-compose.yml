@@ -24,9 +24,9 @@ services:
     # depends_on:
     #   certbot:
     #     condition: service_completed_successfully
-    # build:
-    #   context: .
-    #   dockerfile: Dockerfile
+    build:
+      context: .
+      dockerfile: Dockerfile
     image: r4venme/openconnect:v1.4-client
     container_name: openconnect
     restart: always
