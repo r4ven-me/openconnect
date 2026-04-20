@@ -1,0 +1,78 @@
+---
+
+services:
+  # certbot:
+  #   image: certbot/certbot
+  #   container_name: certbot
+  #   restart: no
+  #   stop_grace_period: 5s
+  #   cpus: 0.5
+  #   mem_limit: 512M
+  #   environment:
+  #     TZ: ${TZ}
+  #   hostname: certbot
+  #   volumes:
+  #     - ./data/ssl:/etc/letsencrypt
+  #   entrypoint: >
+  #     sh -c "
+  #       certbot certonly --non-interactive --keep-until-expiring --standalone --preferred-challenges http --agree-tos --email ${USER_EMAIL} -d ${SRV_CN};
+  #     "
+  #   ports:
+  #     - "80:80"
+
+  openconnect:
+    # depends_on:
+    #   certbot:
+    #     condition: service_completed_successfully
+    # build:
+    #   context: .
+    #   dockerfile: Dockerfile
+    image: r4venme/openconnect:v1.4-client
+    container_name: openconnect
+    restart: always
+    cpus: 0.5
+    mem_limit: 512M
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    hostname: openconnect
+    env_file:
+      - .env
+    volumes:
+      - ./data:/etc/ocserv
+      # - ./ocserv1.p12:/etc/openconnect/ocserv1.p12
+      # - ./ocserv2.p12:/etc/openconnect/ocserv2.p12
+      #- /etc/passwd:/etc/passwd:ro
+      #- /etc/group:/etc/group:ro
+      #- /etc/shadow:/etc/shadow:ro
+    devices:
+      - /dev/net/tun:/dev/net/tun
+      - /dev/vhost-net:/dev/vhost-net
+    ports:
+      - ${SRV_PORT}:443/tcp
+
+  # certbot_renew:
+  #   depends_on:
+  #     certbot:
+  #       condition: service_completed_successfully
+  #   image: certbot/certbot
+  #   container_name: certbot-renew
+  #   restart: unless-stopped
+  #   stop_grace_period: 5s
+  #   cpus: 0.5
+  #   mem_limit: 512M
+  #   environment:
+  #     TZ: ${TZ}
+  #   hostname: certbot-renew
+  #   volumes:
+  #     - ./data/ssl:/etc/letsencrypt
+  #   entrypoint: >
+  #     sh -c "
+  #       trap exit TERM;
+  #       while true; do
+  #         certbot renew --non-interactive --keep-until-expiring --standalone --preferred-challenges http --agree-tos;
+  #         sleep 24h;
+  #       done
+  #     "
+  #   ports:
+  #     - "80:80"

@@ -1,0 +1,14 @@
+[Unit]
+Description=OpenConnect VPN service
+Requires=docker.service
+After=docker.service
+
+[Service]
+Restart=always
+RestartSec=5
+WorkingDirectory=/opt/openconnect
+ExecStart=/usr/bin/docker compose up
+ExecStop=/usr/bin/docker compose down
+
+[Install]
+WantedBy=multi-user.target
