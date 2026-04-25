@@ -27,22 +27,21 @@ DNS2="8.8.4.4"
 
 # OpenConnect client
 # OCCLIENT_ENABLE=true
-# OCCLIENT_TYPE=docker # docker|host
-# OCCLIENT_LOG=true
-# OCCLIENT_IFACE="tun10"
+# OCCLIENT_LOG=1
+# OCCLIENT_IFACE="tun0"
 # OCCLIENT_CHECK_HOST_INTERVAL=5
 # OCCLIENT_CHECK_HOST_THRESHOLD=3
 
 # OCCLIENT_COUNT=2
 
-# OCCLIENT_0_SSL_FLAG=true
+# OCCLIENT_0_SSL_FLAG=1
 # OCCLIENT_0_SERVER="ocserv1.example.com"
 # OCCLIENT_0_SERVER_PORT=443
 # OCCLIENT_0_CERT_FILE="/etc/openconnect/ocserv1.p12"
 # OCCLIENT_0_CERT_PASS="p12SecretInBase64encode" 
 # OCCLIENT_0_CHECK_HOST="10.120.120.1"
 
-# OCCLIENT_1_SSL_FLAG=false
+# OCCLIENT_1_SSL_FLAG=0
 # OCCLIENT_1_SERVER="ocserv2.example.com"
 # OCCLIENT_1_SERVER_PORT=443
 # OCCLIENT_1_CERT_FILE="/etc/openconnect/ocserv2.p12"
@@ -51,7 +50,7 @@ DNS2="8.8.4.4"
 
 # Dnsmasq
 # DNSMASQ_ENABLE=true
-# DNSMASQ_LOG=true
+# DNSMASQ_LOG=1
 # DNSMASQ_LIST='
 # ifconfig.me
 # google.com

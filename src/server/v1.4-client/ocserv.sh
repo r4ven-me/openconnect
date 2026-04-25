@@ -10,7 +10,8 @@ SRV_CN="${SRV_CN:=example.com}"
 SRV_CA="${SRV_CA:=Example CA}"
 IPV4_NET="${IPV4_NET:=10.10.10.0}"
 IPV4_MASK="${IPV4_MASK:=255.255.255.0}"
-DNS="${DNS:=8.8.8.8}"
+DNS1="${DNS1:=8.8.8.8}"
+DNS2="${DNS2:=8.8.4.4}"
 CAMOUFLAGE="${CAMOUFLAGE:=false}"
 CAMOUFLAGE_SECRET="${CAMOUFLAGE_SECRET:=secretword}"
 CAMOUFLAGE_REALM="${CAMOUFLAGE_REALM:=Welcome to admin panel}"
@@ -35,6 +36,7 @@ SCRIPTS_DIR="${OCSERV_DIR}/scripts"
 
 # Occlient
 OCCLIENT_ENABLE="${OCCLIENT_ENABLE:=false}"
+OCCLIENT_TYPE="${OCCLIENT_TYPE:=dcoker}"
 
 # Dnsmasq
 DNSMASQ_ENABLE="${DNSMASQ_ENABLE:=false}"
@@ -46,9 +48,11 @@ for sub_dir in "${OCSERV_DIR}"/{"ssl/live/${SRV_CN}","certs","secrets","scripts"
     fi
 done
 
-if [[ -r /usr/share/doc/ocserv/sample.config && ! -e "${OCSERV_DIR}"/sample.config ]]; then
-    cp /usr/share/doc/ocserv/sample.config "${OCSERV_DIR}"/
-fi
+for example_file in ocserv.conf_example env_example; do
+    if [[ -r /usr/share/doc/ocserv/"${example_file}" && ! -e "${OCSERV_DIR}"/"${example_file}" ]]; then
+        cp /usr/share/doc/ocserv/"${example_file}" "${OCSERV_DIR}"/
+    fi
+done
 
 # Create ocserv config file
 if [[ ! -e "${OCSERV_DIR}"/ocserv.conf ]]; then
@@ -101,7 +105,8 @@ default-domain = $SRV_CN
 ipv4-network = $IPV4_NET
 ipv4-netmask = $IPV4_MASK
 tunnel-all-dns = true
-dns = $DNS
+dns = $DNS1
+dns = $DNS2
 ping-leases = false
 config-per-user = ${OCSERV_DIR}/config-per-user/
 cisco-client-compat = true
@@ -164,62 +169,95 @@ fi
 
 # Create connect script which runs for every user connection
 if [[ ! -e "${SCRIPTS_DIR}"/connect ]]; then
-cat << _EOF_ > "${SCRIPTS_DIR}"/connect && chmod +x "${SCRIPTS_DIR}"/connect
+cat << '_EOF_' > "${SCRIPTS_DIR}"/connect && chmod +x "${SCRIPTS_DIR}"/connect
 #!/usr/bin/env bash
 
 set -Eeuo pipefail
 
-echo "\$(date) User \${USERNAME} Connected - Server: \${IP_REAL_LOCAL} VPN IP: \${IP_REMOTE}  Remote IP: \${IP_REAL} Device:\${DEVICE}"
-echo "Running iptables MASQUERADE for User \${USERNAME} connected with VPN IP \${IP_REMOTE}"
-if [[ "\$OCCLIENT_ENABLE" == "true" ]] && ip link show "\$OCCLIENT_IFACE" &> /dev/null; then
-    if [[ "\$DNSMASQ_ENABLE" != "true" ]]; then
-        ip rule add from "\${IP_REMOTE}"/32 table 200 || true
-        iptables -t nat -A POSTROUTING -s "\${IP_REMOTE}"/32 -o "\$OCCLIENT_IFACE" -j MASQUERADE
+while ip rule del from "${IP_REMOTE}"/32 table 430 &> /dev/null; do sleep 2; done
+
+MAIN_IFACE=$(ip route | awk '/default/ {print $5; exit}')
+
+echo "$(date) User ${USERNAME} Connected - Server: ${IP_REAL_LOCAL} VPN IP: ${IP_REMOTE}  Remote IP: ${IP_REAL} Device:${DEVICE}"
+echo "Running nftables MASQUERADE for User ${USERNAME} connected with VPN IP ${IP_REMOTE}"
+
+# Ensure nftables nat table and POSTROUTING chain exist (works even if interfaces are down)
+if ! nft list table inet nat &> /dev/null; then
+    nft add table inet nat
+fi
+
+if ! nft list chain inet nat POSTROUTING &> /dev/null; then
+    nft "add chain inet nat POSTROUTING { type nat hook postrouting priority 100 ; policy accept ; }"
+fi
+
+if [[ "$OCCLIENT_ENABLE" == "true" ]] && ip link show "$OCCLIENT_IFACE" &> /dev/null; then
+    if [[ "$DNSMASQ_ENABLE" != "true" ]]; then
+        ip rule add from "${IP_REMOTE}"/32 table 430 || true
+        nft add rule inet nat POSTROUTING ip saddr "${IP_REMOTE}"/32 oifname "$OCCLIENT_IFACE" counter masquerade comment "masq-${IP_REMOTE}" || true
     else
-        iptables -t nat -A POSTROUTING -s "\${IP_REMOTE}"/32 -o eth0 -j MASQUERADE
+        nft add rule inet nat POSTROUTING ip saddr "${IP_REMOTE}"/32 oifname "$MAIN_IFACE" counter masquerade comment "masq-${IP_REMOTE}" || true
     fi
 else
-    iptables -t nat -A POSTROUTING -s "\${IP_REMOTE}"/32 -o eth0 -j MASQUERADE
+    nft add rule inet nat POSTROUTING ip saddr "${IP_REMOTE}"/32 oifname "$MAIN_IFACE" counter masquerade comment "masq-${IP_REMOTE}" || true
 fi
 _EOF_
 fi
 
 # Create disconnect script which runs for every user disconnection
 if [[ ! -e "${SCRIPTS_DIR}"/disconnect ]]; then
-cat << _EOF_ > "${SCRIPTS_DIR}"/disconnect && chmod +x "${SCRIPTS_DIR}"/disconnect
+cat << '_EOF_' > "${SCRIPTS_DIR}"/disconnect && chmod +x "${SCRIPTS_DIR}"/disconnect
 #!/usr/bin/env bash
 
 set -Eeuo pipefail
 
-echo "\$(date) User \${USERNAME} Disconnected - Bytes In: \${STATS_BYTES_IN} Bytes Out: \${STATS_BYTES_OUT} Duration:\${STATS_DURATION}"
-if [[ "\$OCCLIENT_ENABLE" == "true" ]] && ip link show "\$OCCLIENT_IFACE" &> /dev/null; then
-    if [[ "\$DNSMASQ_ENABLE" != "true" ]]; then
-        ip rule del from "\${IP_REMOTE}"/32 table 200 || true
-        iptables -t nat -D POSTROUTING -s "\${IP_REMOTE}"/32 -o "\$OCCLIENT_IFACE" -j MASQUERADE
-    else
-        iptables -t nat -D POSTROUTING -s "\${IP_REMOTE}"/32 -o eth0 -j MASQUERADE
+echo "$(date) User ${USERNAME} Disconnected - Bytes In: ${STATS_BYTES_IN} Bytes Out: ${STATS_BYTES_OUT} Duration:${STATS_DURATION}"
+
+# Ensure nftables nat table exists (for rule deletion)
+if ! nft list table inet nat &> /dev/null; then
+    nft add table inet nat
+fi
+
+if ! nft list chain inet nat POSTROUTING &> /dev/null; then
+    nft add chain inet nat POSTROUTING { type nat hook postrouting priority 100 \; policy accept \; }
+fi
+
+# Delete the exact MASQUERADE rule by comment (works regardless of oifname)
+if [[ -n "${IP_REMOTE}" ]]; then
+    handles=($(nft -a list chain inet nat POSTROUTING 2>/dev/null \
+    | grep "comment \"masq-${IP_REMOTE}\"" \
+    | grep -o 'handle [0-9]*' \
+    | awk '{print $2}'))
+
+    if (( ${#handles[@]} )); then
+        for rule in "${handles[@]}"; do
+            nft delete rule inet nat POSTROUTING handle "$rule" 2>/dev/null || true
+        done
     fi
-else
-    iptables -t nat -D POSTROUTING -s "\${IP_REMOTE}"/32 -o eth0 -j MASQUERADE
+fi
+
+if [[ "$OCCLIENT_ENABLE" == "true" ]] && ip link show "$OCCLIENT_IFACE" &> /dev/null; then
+    if [[ "$DNSMASQ_ENABLE" != "true" ]]; then
+        ip rule del from "${IP_REMOTE}"/32 table 430 || true
+    fi
 fi
 _EOF_
 fi
 
 # Create script to create new users
 if [[ ! -e "${SCRIPTS_DIR}"/ocuser ]]; then
-cat << _EOF_ > "${SCRIPTS_DIR}"/ocuser && chmod +x "${SCRIPTS_DIR}"/ocuser
+cat << '_EOF_' > "${SCRIPTS_DIR}"/ocuser && chmod +x "${SCRIPTS_DIR}"/ocuser
 #!/usr/bin/env bash
 
 set -Eeuo pipefail
 
 # Check and set script params
-if [[ \$# -eq 2 ]]; then
-    USER_UID="\$1"
-    USER_CN="\$2"
-elif [[ \$# -eq 3 ]]; then
-	if [[ "\$1" == "-A" ]]; then
-    		USER_UID="\$2"
-    		USER_CN="\$3"
+if [[ $# -eq 2 ]]; then
+    USER_UID="$1"
+    USER_CN="$2"
+elif [[ $# -eq 3 ]]; then
+	if [[ "$1" == "-A" ]]; then
+    		USER_UID="$2"
+    		USER_CN="$3"
 	else
 		echo "Use -A key as a first param to generate cert for IOS devices" >&2
         exit 1
@@ -233,48 +271,48 @@ else
 fi
 
 # Modify user cert template and generate user key, cert and protected .p12 file
-sed -i -e "s/^organization.*/organization = \$SRV_CN/" -e "s/^cn.*/cn = \$USER_CN/" -e "s/^uid.*/uid = \$USER_UID/g" "\${CERTS_DIR}"/users.cfg
-echo "\$(tr -cd "[:alnum:]" < /dev/urandom | head -c 60)" | ocpasswd -c "\${OCSERV_DIR}"/ocpasswd "\$USER_UID"
-certtool --generate-privkey --outfile "\${CERTS_DIR}"/"\${USER_UID}"-privkey.pem
-certtool --generate-certificate --load-privkey "\${CERTS_DIR}"/"\${USER_UID}"-privkey.pem --load-ca-certificate "\${CERTS_DIR}"/ca-cert.pem --load-ca-privkey "\${CERTS_DIR}"/ca-key.pem --template "\${CERTS_DIR}"/users.cfg --outfile "\${CERTS_DIR}"/"\${USER_UID}"-cert.pem
-if [[ "\$1" == "-A" ]]; then
-	sleep 1 && certtool --to-p12 --load-certificate "\${CERTS_DIR}"/"\${USER_UID}"-cert.pem --load-privkey "\${CERTS_DIR}"/"\${USER_UID}"-privkey.pem --pkcs-cipher 3des-pkcs12 --hash SHA1 --outder --outfile "\${SECRETS_DIR}"/"\${USER_UID}".p12
+sed -i -e "s/^organization.*/organization = $SRV_CN/" -e "s/^cn.*/cn = $USER_CN/" -e "s/^uid.*/uid = $USER_UID/g" "${CERTS_DIR}"/users.cfg
+echo "$(tr -cd "[:alnum:]" < /dev/urandom | head -c 60)" | ocpasswd -c "${OCSERV_DIR}"/ocpasswd "$USER_UID"
+certtool --generate-privkey --outfile "${CERTS_DIR}"/"${USER_UID}"-privkey.pem
+certtool --generate-certificate --load-privkey "${CERTS_DIR}"/"${USER_UID}"-privkey.pem --load-ca-certificate "${CERTS_DIR}"/ca-cert.pem --load-ca-privkey "${CERTS_DIR}"/ca-key.pem --template "${CERTS_DIR}"/users.cfg --outfile "${CERTS_DIR}"/"${USER_UID}"-cert.pem
+if [[ "$1" == "-A" ]]; then
+	sleep 1 && certtool --to-p12 --load-certificate "${CERTS_DIR}"/"${USER_UID}"-cert.pem --load-privkey "${CERTS_DIR}"/"${USER_UID}"-privkey.pem --pkcs-cipher 3des-pkcs12 --hash SHA1 --outder --outfile "${SECRETS_DIR}"/"${USER_UID}".p12
 else
-	sleep 1 && certtool --load-certificate "\${CERTS_DIR}"/"\${USER_UID}"-cert.pem --load-privkey "\${CERTS_DIR}"/"\${USER_UID}"-privkey.pem --pkcs-cipher aes-256 --to-p12 --outder --outfile "\${SECRETS_DIR}"/"\${USER_UID}".p12
+	sleep 1 && certtool --load-certificate "${CERTS_DIR}"/"${USER_UID}"-cert.pem --load-privkey "${CERTS_DIR}"/"${USER_UID}"-privkey.pem --pkcs-cipher aes-256 --to-p12 --outder --outfile "${SECRETS_DIR}"/"${USER_UID}".p12
 fi
 _EOF_
 fi
 
 # Add revoke script
 if [[ ! -e "${SCRIPTS_DIR}"/ocrevoke ]]; then
-cat << _EOF_ > "${SCRIPTS_DIR}"/ocrevoke && chmod +x "${SCRIPTS_DIR}"/ocrevoke
+cat << '_EOF_' > "${SCRIPTS_DIR}"/ocrevoke && chmod +x "${SCRIPTS_DIR}"/ocrevoke
 #!/usr/bin/env bash
 
 set -Eeuo pipefail
 
-if [[ ! -e "\${CERTS_DIR}"/crl.tmpl ]]; then
-cat << __EOF__ > "\${CERTS_DIR}"/crl.tmpl
+if [[ ! -e "${CERTS_DIR}"/crl.tmpl ]]; then
+cat << __EOF__ > "${CERTS_DIR}"/crl.tmpl
 crl_next_update = 365
 crl_number = 1
 __EOF__
 fi
 
-if [[ \$# -eq 1 ]]; then
-    if [[ "\$1" == "HELP" ]]; then
+if [[ $# -eq 1 ]]; then
+    if [[ "$1" == "HELP" ]]; then
         echo "Usage:
         CMD to revoke cert of some user: ocrevoke <exist_user> 
         CMD to apply current revoked.pem: ocrevoke RELOAD
         CMD to reset all revokes: ocrevoke RESET
         CMD to print this help: ocrevoke HELP"
-    elif [[ "\$1" == "RESET" ]]; then
-        certtool --generate-crl --load-ca-privkey "\${CERTS_DIR}"/ca-key.pem --load-ca-certificate "\${CERTS_DIR}"/ca-cert.pem --template "\${CERTS_DIR}"/crl.tmpl --outfile "\${CERTS_DIR}"/crl.pem
+    elif [[ "$1" == "RESET" ]]; then
+        certtool --generate-crl --load-ca-privkey "${CERTS_DIR}"/ca-key.pem --load-ca-certificate "${CERTS_DIR}"/ca-cert.pem --template "${CERTS_DIR}"/crl.tmpl --outfile "${CERTS_DIR}"/crl.pem
         occtl reload
-    elif [[ "\$1" == "RELOAD" ]]; then
-        certtool --generate-crl --load-ca-privkey "\${CERTS_DIR}"/ca-key.pem --load-ca-certificate "\${CERTS_DIR}"/ca-cert.pem --load-certificate "\${CERTS_DIR}"/revoked.pem --template "\${CERTS_DIR}"/crl.tmpl --outfile "\${CERTS_DIR}"/crl.pem
+    elif [[ "$1" == "RELOAD" ]]; then
+        certtool --generate-crl --load-ca-privkey "${CERTS_DIR}"/ca-key.pem --load-ca-certificate "${CERTS_DIR}"/ca-cert.pem --load-certificate "${CERTS_DIR}"/revoked.pem --template "${CERTS_DIR}"/crl.tmpl --outfile "${CERTS_DIR}"/crl.pem
     else
-        USER_UID="\$1"
-        cat "\${CERTS_DIR}"/"\${USER_UID}"-cert.pem >> "\${CERTS_DIR}"/revoked.pem
-        certtool --generate-crl --load-ca-privkey "\${CERTS_DIR}"/ca-key.pem --load-ca-certificate "\${CERTS_DIR}"/ca-cert.pem --load-certificate "\${CERTS_DIR}"/revoked.pem --template "\${CERTS_DIR}"/crl.tmpl --outfile "\${CERTS_DIR}"/crl.pem
+        USER_UID="$1"
+        cat "${CERTS_DIR}"/"${USER_UID}"-cert.pem >> "${CERTS_DIR}"/revoked.pem
+        certtool --generate-crl --load-ca-privkey "${CERTS_DIR}"/ca-key.pem --load-ca-certificate "${CERTS_DIR}"/ca-cert.pem --load-certificate "${CERTS_DIR}"/revoked.pem --template "${CERTS_DIR}"/crl.tmpl --outfile "${CERTS_DIR}"/crl.pem
         occtl reload
     fi
 else
@@ -289,31 +327,31 @@ fi
 
 # Add ocuser2fa script
 if [[ "$OTP_ENABLE" == "true" && ! -e "${SCRIPTS_DIR}"/ocuser2fa ]]; then
-cat << _EOF_ > "${SCRIPTS_DIR}"/ocuser2fa && chmod +x "${SCRIPTS_DIR}"/ocuser2fa
+cat << '_EOF_' > "${SCRIPTS_DIR}"/ocuser2fa && chmod +x "${SCRIPTS_DIR}"/ocuser2fa
 #!/usr/bin/env bash
 
 set -Eeuo pipefail
 
-if [[ \$# -eq 1 ]]; then
-    USER_ID="\$1"
-    OTP_SECRET="\$(head -c 16 /dev/urandom | xxd -c 256 -ps)"
-    OTP_SECRET_BASE32="\$(echo 0x"\${OTP_SECRET}" | xxd -r -c 256 | base32)"
-    OTP_SECRET_QR="otpauth://totp/\$USER_ID?secret=\$OTP_SECRET_BASE32&issuer=$SRV_CA&algorithm=SHA1&digits=6&period=30"
+if [[ $# -eq 1 ]]; then
+    USER_ID="$1"
+    OTP_SECRET="$(head -c 16 /dev/urandom | xxd -c 256 -ps)"
+    OTP_SECRET_BASE32="$(echo 0x"${OTP_SECRET}" | xxd -r -c 256 | base32)"
+    OTP_SECRET_QR="otpauth://totp/$USER_ID?secret=$OTP_SECRET_BASE32&issuer=$SRV_CA&algorithm=SHA1&digits=6&period=30"
 
-    if [[ ! -e "\${SECRETS_DIR}"/users.oath ]] || ! grep -qP "(?<!\\S)\${USER_ID}(?!\\S)" "\${SECRETS_DIR}"/users.oath; then
-        echo "HOTP/T30 \$USER_ID - \$OTP_SECRET" >> "\${SECRETS_DIR}"/users.oath
-        echo "OTP secret for \$USER_ID: \$OTP_SECRET"
-        echo "OTP secret in base32: \$OTP_SECRET_BASE32"
+    if [[ ! -e "${SECRETS_DIR}"/users.oath ]] || ! grep -qP "(?<!\\S)${USER_ID}(?!\\S)" "${SECRETS_DIR}"/users.oath; then
+        echo "HOTP/T30 $USER_ID - $OTP_SECRET" >> "${SECRETS_DIR}"/users.oath
+        echo "OTP secret for $USER_ID: $OTP_SECRET"
+        echo "OTP secret in base32: $OTP_SECRET_BASE32"
         echo "OTP secret in QR code:"
-        qrencode -t ANSIUTF8 "\$OTP_SECRET_QR"
-        qrencode "\$OTP_SECRET_QR" -s 10 -o "\${SECRETS_DIR}"/otp_"\${USER_ID}".png
-        echo "TOTP secret in png image saved at: \${SECRETS_DIR}/otp_\${USER_ID}.png"
+        qrencode -t ANSIUTF8 "$OTP_SECRET_QR"
+        qrencode "$OTP_SECRET_QR" -s 10 -o "${SECRETS_DIR}"/otp_"${USER_ID}".png
+        echo "TOTP secret in png image saved at: ${SECRETS_DIR}/otp_${USER_ID}.png"
 
         send_qr_by_email() {
             EMAIL_REGEX="^[a-zA-Z0-9._-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$"
 
-            if [[ \$USER_ID =~ \$EMAIL_REGEX ]]; then
-                cat << EOF | msmtp --file="\${SCRIPTS_DIR}"/msmtprc "\$USER_ID"
+            if [[ $USER_ID =~ $EMAIL_REGEX ]]; then
+                cat << EOF | msmtp --file="${SCRIPTS_DIR}"/msmtprc "$USER_ID"
 Subject: TOTP QR code for OpenConnect auth
 MIME-Version: 1.0
 Content-Type: multipart/mixed; boundary="boundary"
@@ -322,63 +360,63 @@ Content-Type: multipart/mixed; boundary="boundary"
 Content-Type: text/plain
 
 TOTP secret for OpenConnect (base32):
-\$OTP_SECRET_BASE32
+$OTP_SECRET_BASE32
 
 --boundary
 Content-Type: image/png; name="file.png"
 Content-Transfer-Encoding: base64
 Content-Disposition: attachment; filename="file.png"
 
-\$(base64 "\${SECRETS_DIR}"/otp_"\${USER_ID}".png)
+$(base64 "${SECRETS_DIR}"/otp_"${USER_ID}".png)
 --boundary--
 EOF
-                echo "[\$(date '+%F %T')] - TOTP secret and QR code successfully sent to \$USER_ID via Email" | tee -a "\${OCSERV_DIR}"/pam.log
+                echo "[$(date '+%F %T')] - TOTP secret and QR code successfully sent to $USER_ID via Email" | tee -a "${OCSERV_DIR}"/pam.log
             else
                 return 0
             fi
         }
 
-        if [[ "\$OTP_SEND_BY_EMAIL" == "true" ]]; then send_qr_by_email; fi
+        if [[ "$OTP_SEND_BY_EMAIL" == "true" ]]; then send_qr_by_email; fi
 
         send_qr_by_telegram() {
-            TG_REGEX="^[a-zA-Z][a-zA-Z0-9_]{4,31}\$"
+            TG_REGEX="^[a-zA-Z][a-zA-Z0-9_]{4,31}$"
 
-            if [[ \$USER_ID =~ \$TG_REGEX ]]; then
+            if [[ $USER_ID =~ $TG_REGEX ]]; then
                 TG_MESSAGE="TOTP secret for OpenConnect (base32):
-\$OTP_SECRET_BASE32"
-                TG_USER_FILE="\${SCRIPTS_DIR}/tg_users.txt"
+$OTP_SECRET_BASE32"
+                TG_USER_FILE="${SCRIPTS_DIR}/tg_users.txt"
                 
-                if grep -qP "(?<!\\S)\${USER_ID}(?!\\S)" "\$TG_USER_FILE" 2> /dev/null; then
-                    TG_CHAT_ID=\$(grep -P "(?<!\\S)\${USER_ID}(?!\\S)" "\$TG_USER_FILE" | awk '{print \$1}')
+                if grep -qP "(?<!\\S)${USER_ID}(?!\\S)" "$TG_USER_FILE" 2> /dev/null; then
+                    TG_CHAT_ID=$(grep -P "(?<!\\S)${USER_ID}(?!\\S)" "$TG_USER_FILE" | awk '{print $1}')
                 else
-                    TG_RESPONSE="\$(curl -s "https://api.telegram.org/bot\$TG_TOKEN/getUpdates")"
-                    TG_CHAT_ID=\$(echo "\$TG_RESPONSE" | jq -r --arg USERNAME "\$USER_ID" '.result[] | select(.message.from.username == \$USERNAME) | .message.chat.id')
+                    TG_RESPONSE="$(curl -s "https://api.telegram.org/bot${TG_TOKEN}/getUpdates")"
+                    TG_CHAT_ID=$(echo "$TG_RESPONSE" | jq -r --arg USERNAME "$USER_ID" '.result[] | select(.message.from.username == $USERNAME) | .message.chat.id')
 
-                    if [[ -z "\$TG_CHAT_ID" ]]; then
-                        echo "[\$(date '+%F %T')] - User was not found or did not interact with the bot" >> "\${OCSERV_DIR}"/pam.log
+                    if [[ -z "$TG_CHAT_ID" ]]; then
+                        echo "[$(date '+%F %T')] - User was not found or did not interact with the bot" >> "${OCSERV_DIR}"/pam.log
                         return 0
                     fi
-                    echo "\$TG_CHAT_ID \$USER_ID" >> "\$TG_USER_FILE"
+                    echo "$TG_CHAT_ID $USER_ID" >> "$TG_USER_FILE"
                 fi
 
-                curl -s -X POST "https://api.telegram.org/bot\$TG_TOKEN/sendPhoto" \\
+                curl -s -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendPhoto" \\
                     -H "Content-Type: multipart/form-data" \\
-                    -F "chat_id=\$TG_CHAT_ID" \\
-                    -F "photo=@\${SECRETS_DIR}/otp_\${USER_ID}.png" \\
-                    -F "caption=\$TG_MESSAGE" > /dev/null 2>> "\${OCSERV_DIR}"/pam.log
+                    -F "chat_id=$TG_CHAT_ID" \\
+                    -F "photo=@${SECRETS_DIR}/otp_${USER_ID}.png" \\
+                    -F "caption=$TG_MESSAGE" > /dev/null 2>> "${OCSERV_DIR}"/pam.log
 
-                echo "[\$(date '+%F %T')] - TOTP secret and QR code successfully sent to \$USER_ID via Telegram" | tee -a "\${OCSERV_DIR}"/pam.log
+                echo "[$(date '+%F %T')] - TOTP secret and QR code successfully sent to $USER_ID via Telegram" | tee -a "${OCSERV_DIR}"/pam.log
             fi
         }
 
-        if [[ "\$OTP_SEND_BY_TELEGRAM" == "true" ]]; then send_qr_by_telegram; fi
+        if [[ "$OTP_SEND_BY_TELEGRAM" == "true" ]]; then send_qr_by_telegram; fi
 
     else
-        echo "OTP token already exists for \$USER_ID in \${SECRETS_DIR}/users.oath"
+        echo "OTP token already exists for $USER_ID in ${SECRETS_DIR}/users.oath"
         exit 1
     fi
 else
-    echo "Usage: \$(basename "\$0") <user_id>"
+    echo "Usage: $(basename "$0") <user_id>"
     exit 1
 fi
 _EOF_
@@ -493,7 +531,7 @@ export PATH="/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin"
 
 # ================= CONFIG =================
 
-LOG_TO_STDOUT="${OCCLIENT_LOG:-1}" 
+LOG_TO_STDOUT="${OCCLIENT_LOG:-true}" 
 
 VPN_IFACE="${OCCLIENT_IFACE:-tun0}"
 VPN_BIN="$(command -v openconnect || true)"
@@ -510,7 +548,7 @@ log_pipe() {
     while IFS= read -r line; do
         local log_line="[occlient] $line"
         
-        if (( LOG_TO_STDOUT )); then
+        if [[ "$LOG_TO_STDOUT" == "true" ]]; then
             echo "$log_line"
         fi
     done
@@ -526,14 +564,13 @@ load_vpn_profile() {
     local i="$CURRENT_VPN_INDEX"
     local var
 
-    var="OCCLIENT_${i}_SSL_FLAG";    VPN_SSL_FLAG="${!var:-0}"
+    var="OCCLIENT_${i}_SSL_FLAG";    VPN_SSL_FLAG="${!var:-true}"
     var="OCCLIENT_${i}_SERVER";      VPN_ADDRESS="${!var:-}"
     var="OCCLIENT_${i}_SERVER_PORT"; VPN_PORT="${!var:-}"
     var="OCCLIENT_${i}_CERT_FILE";   VPN_CERT_FILE="${!var:-}"
     var="OCCLIENT_${i}_CERT_PASS";   VPN_CERT_PASS="${!var:-}"
     var="OCCLIENT_${i}_CHECK_HOST";  CHECK_HOST="${!var:-}"
 
-    # обязательные проверки
     [[ -n "$VPN_ADDRESS" ]] || { echo "Error: VPN_ADDRESS is empty for profile [$i]"; exit 1; }
     [[ -n "$VPN_PORT" ]]    || { echo "Error: VPN_PORT is empty for profile [$i]"; exit 1; }
     [[ -n "$CHECK_HOST" ]]  || { echo "Error: CHECK_HOST is empty for profile [$i]"; exit 1; }
@@ -552,10 +589,10 @@ next_vpn_profile() {
 }
 
 kill_vpn_pid() {
-    if [[ -n "$VPN_PID" ]] && kill -0 "$VPN_PID" 2>/dev/null; then
+    if [[ -n "$VPN_PID" ]] && kill -0 "$VPN_PID" 2> /dev/null; then
         echo "Stopping previous VPN process (PID="$VPN_PID")"
-        kill "$VPN_PID" 2>/dev/null || true
-        wait "$VPN_PID" 2>/dev/null || true
+        kill "$VPN_PID" 2> /dev/null || true
+        wait "$VPN_PID" 2> /dev/null || true
         while ip link show "$VPN_IFACE" &> /dev/null; do sleep 2; done
         sleep 1
     fi
@@ -564,7 +601,7 @@ kill_vpn_pid() {
 connect_cmd(){
     echo "Connecting to VPN $VPN_ADDRESS:$VPN_PORT (iface=$VPN_IFACE)..."
     
-    if (( VPN_SSL_FLAG )); then
+    if [[ "$VPN_SSL_FLAG" == "true" ]]; then
         echo "${VPN_CERT_PASS}" | base64 -d | "$VPN_BIN" -i "$VPN_IFACE" -s "$VPN_VPNC_SCRIPT" -c "$VPN_CERT_FILE" "${VPN_ADDRESS}:${VPN_PORT}" &
     else
         echo -e "$(echo "${VPN_CERT_PASS}" | base64 -d)\nyes" | "$VPN_BIN" -i "$VPN_IFACE" -s "$VPN_VPNC_SCRIPT" -c "$VPN_CERT_FILE" "${VPN_ADDRESS}:${VPN_PORT}" &
@@ -591,20 +628,20 @@ connect_cmd(){
 connect_post_up_cmd() {
     if [[ ! -d /etc/iproute2 ]]; then
         mkdir -p /etc/iproute2/
-        echo "200 oc_vpn" > /etc/iproute2/rt_tables
+        echo "430 oc_vpn" > /etc/iproute2/rt_tables
     else
-        if ! grep -q "200 oc_vpn" /etc/iproute2/rt_tables &> /dev/null; then
-            echo "200 oc_vpn" >> /etc/iproute2/rt_tables
+        if ! grep -q "430 oc_vpn" /etc/iproute2/rt_tables &> /dev/null; then
+            echo "430 oc_vpn" >> /etc/iproute2/rt_tables
         fi
     fi
 
     sleep 1
 
-    ip route add default dev "$VPN_IFACE" table 200 || true
+    ip route add default dev "$VPN_IFACE" table 430 || true
 }
 
 connect_post_down_cmd() {
-    ip route del default dev "$VPN_IFACE" table 200 || true
+    ip route del default dev "$VPN_IFACE" table 430 || true
 }
 
 check_cmd() {
@@ -709,7 +746,7 @@ main() {
     [[ -n "$VPN_BIN" ]] || { echo "Error: openconnect not found in PATH"; exit 1; }
 
     for util in "${CHECK_UTILS[@]}"; do
-        command -v "$util" &>/dev/null || {
+        command -v "$util" &> /dev/null || {
             echo "Error: required utility not found: $util"
             exit 1
         }
@@ -736,7 +773,7 @@ start_action() {
 
 stop_action() {
     [[ -f "$SCRIPT_LOCK" ]] || { echo "Service is not running (no lock file found)"; return; }
-    kill -TERM "$(cat "$SCRIPT_LOCK")" 2>/dev/null || true
+    kill -TERM "$(cat "$SCRIPT_LOCK")" 2> /dev/null || true
 }
 
 status_action() {
@@ -758,11 +795,15 @@ _EOF_
 fi
 
 openconnect_client() {
-    if [[ "$OCCLIENT_ENABLE" == "true" && -e "${SCRIPTS_DIR}"/occlient ]]; then
+    if [[ "$OCCLIENT_ENABLE" == "true" &&  -e "${SCRIPTS_DIR}"/occlient ]]; then
         if [[ -n "$OCCLIENT_0_SERVER" && -n "$OCCLIENT_0_CERT_PASS" && -n "$OCCLIENT_0_CHECK_HOST" ]]; then
-            until ss -tln | grep -qE '^LISTEN.*:443'; do sleep 5; done
-            sleep 2
-            "${SCRIPTS_DIR}"/occlient start
+            if [[ "$OCCLIENT_TYPE" == "docker" ]]; then
+                until ss -tln | grep -qE '^LISTEN.*:443'; do sleep 5; done
+                sleep 2
+                "${SCRIPTS_DIR}"/occlient start
+            elif [[ "$OCCLIENT_TYPE" == "host" ]]; then
+                echo "Using openconnect client in host mode..."
+            fi
         else
             echo "Some OCCLIENT_ variables is not defined"
             return 0
@@ -787,19 +828,18 @@ export PATH="/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin"
 
 # ================= CONFIG =================
 
-LOG_TO_STDOUT="${DNSMASQ_LOG:-1}"
+LOG_TO_STDOUT="${DNSMASQ_LOG:-true}"
 VPN_IFACE="${OCCLIENT_IFACE:-tun0}"
 DNSMASQ_BIN="$(command -v dnsmasq || true)"
 
-REQUIRED_UTILS=("ip" "iptables" "ipset")
+REQUIRED_UTILS=("ip" "nft")
 
 # ================= LOGGING =================
 
 log_pipe() {
     while IFS= read -r line; do
         local log_line="[dnsmasq] $line"
-        
-        if (( LOG_TO_STDOUT )); then
+        if [[ "$LOG_TO_STDOUT" == "true" ]]; then
             echo "$log_line"
         fi
     done
@@ -809,13 +849,17 @@ exec > >(log_pipe) 2>&1
 
 # ================= CHECKS =================
 
+: "${OCSERV_DIR:?OCSERV_DIR is required}"
+: "${DNSMASQ_LIST:?DNSMASQ_LIST is required}"
+: "${SRV_CN:?SRV_CN is required}"
+
 [[ -n "$DNSMASQ_BIN" ]] || {
     echo "Error: dnsmasq not found in PATH"
     exit 1
 }
 
 for util in "${REQUIRED_UTILS[@]}"; do
-    command -v "$util" &>/dev/null || {
+    command -v "$util" &> /dev/null || {
         echo "Error: required utility not found: $util"
         exit 1
     }
@@ -823,67 +867,118 @@ done
 
 echo "Using VPN interface: $VPN_IFACE"
 
-if ! ip link show "$VPN_IFACE" &>/dev/null; then
+if ! ip link show "$VPN_IFACE" &> /dev/null; then
     echo "Warning: interface $VPN_IFACE not found (routes may fail)"
 fi
 
 if [[ ! -d /etc/iproute2 ]]; then mkdir -p /etc/iproute2/; fi
 
-if ! grep -q "250 dnsmasq" /etc/iproute2/rt_tables &> /dev/null; then
-    echo "250 dnsmasq" >> /etc/iproute2/rt_tables
+if ! grep -q "431 dnsmasq" /etc/iproute2/rt_tables &> /dev/null; then
+    echo "431 dnsmasq" >> /etc/iproute2/rt_tables
 fi
 
-main_ip=$(ip -4 addr show eth0 | grep -o 'inet [0-9.]*' | cut -d' ' -f2)
+# MAIN_IFACE=$(ip route | awk '/default/ {print $5; exit}')
+DNS_IP=$(ip -4 addr show "$VPN_IFACE" | grep -o 'inet [0-9.]*' | cut -d' ' -f2 || echo "")
 
-sed -iE "s/^dns.*=.*/dns = $main_ip/" "${OCSERV_DIR}"/ocserv.conf
-
-echo "listen-address=${main_ip}" >> /etc/dnsmasq.conf
+if [[ -n "$DNS_IP" ]]; then
+    if grep -q '^dns' "$OCSERV_DIR/ocserv.conf"; then
+        sed -i "s|^dns.*=.*|dns = $DNS_IP|" "$OCSERV_DIR/ocserv.conf"
+    else
+        echo "dns = $DNS_IP" >> "$OCSERV_DIR/ocserv.conf"
+    fi
+    
+    occtl reload &> /dev/null
+    echo "listen-address=${DNS_IP}" > /etc/dnsmasq.conf
+else
+    echo "Warning: could not determine main IP on $MAIN_IFACE"
+fi
 
 # ================= NETWORK SETUP =================
 
-echo "Creating ipset 'tunnelset'..."
-ipset create tunnelset hash:ip timeout 86400 -exist
+# Ensure tables exist
+for tbl in mangle nat; do
+    if ! nft list table inet "$tbl" &> /dev/null; then
+        nft add table inet "$tbl"
+    fi
+done
+
+# PREROUTING (incoming / forwarded traffic)
+if ! nft list chain inet mangle PREROUTING &> /dev/null; then
+    nft add chain inet mangle PREROUTING "{ type filter hook prerouting priority mangle; policy accept; }"
+fi
+
+# OUTPUT (local traffic routing decision hook)
+if ! nft list chain inet mangle OUTPUT &> /dev/null; then
+    nft add chain inet mangle OUTPUT "{ type route hook output priority mangle; policy accept; }"
+fi
+
+# NAT POSTROUTING
+if ! nft list chain inet nat POSTROUTING &> /dev/null; then
+    nft add chain inet nat POSTROUTING "{ type nat hook postrouting priority srcnat; policy accept; }"
+fi
+
+# Set for DNS domains resolved via dnsmasq
+if ! nft list set inet mangle tunnelset &> /dev/null; then
+    nft add set inet mangle tunnelset "{ type ipv4_addr; flags timeout; timeout 86400s; }"
+fi
+
+echo "Configuring nftables rules..."
+
+# MARK + CONNTRACK (CRITICAL PART)
+for chain in PREROUTING OUTPUT; do
+    if ! nft list chain inet mangle "$chain" 2> /dev/null | grep -q "tunnelset"; then
+        nft add rule inet mangle "$chain" ip daddr @tunnelset ct mark set 0x1 meta mark set ct mark
+    fi
+done
+
+# MASQUERADE for VPN-marked traffic
+if ! nft list chain inet nat POSTROUTING 2> /dev/null | grep -q "0x00000001"; then
+    nft add rule inet nat POSTROUTING meta mark 0x1 oifname "$VPN_IFACE" counter masquerade comment "dnsmasq-tunnel-masq"
+fi
 
 echo "Configuring routing rules..."
-ip rule add fwmark 0x1 table 250 priority 100 2>/dev/null || true
-ip route add default dev "$VPN_IFACE" table 250 2>/dev/null || true
+ip rule show | grep -q "fwmark 0x1 lookup dnsmasq" || \
+    ip rule add fwmark 0x1 table 431 priority 100 || true
 
-echo "Configuring iptables rules..."
-
-iptables -t mangle -C OUTPUT -m set --match-set tunnelset dst -j MARK --set-mark 0x1 2>/dev/null || \
-    iptables -t mangle -A OUTPUT -m set --match-set tunnelset dst -j MARK --set-mark 0x1
-
-iptables -t mangle -C PREROUTING -m set --match-set tunnelset dst -j MARK --set-mark 0x1 2>/dev/null || \
-    iptables -t mangle -A PREROUTING -m set --match-set tunnelset dst -j MARK --set-mark 0x1
-
-iptables -t nat -C POSTROUTING -o "$VPN_IFACE" -m mark --mark 0x1 -j MASQUERADE 2>/dev/null || \
-    iptables -t nat -A POSTROUTING -o "$VPN_IFACE" -m mark --mark 0x1 -j MASQUERADE
+ip route show table 431 default 2> /dev/null | grep -q "$VPN_IFACE" || \
+    ip route add default dev "$VPN_IFACE" table 431 || true
 
 # ================= RUN =================
 
-#printf "%s\n" "$DNSMASQ_CONFIG" > /etc/dnsmasq.conf
-echo -e "$DNSMASQ_CONFIG" > /etc/dnsmasq.conf
+printf "server=%s\nserver=%s\n" "${DNS1:-8.8.8.8}" "${DNS2:-8.8.4.4}" >> /etc/dnsmasq.conf
+
+echo "$DNSMASQ_LIST" | \
+  grep -v '^[[:space:]]*$' | \
+  while read -r domain; do
+    domain=$(echo "$domain" | xargs)
+    [[ -n "$domain" ]] && printf "nftset=/%s/4#inet#mangle#tunnelset\n" "$domain"
+  done >> /etc/dnsmasq.conf
 
 echo "Starting dnsmasq in foreground..."
-"$DNSMASQ_BIN" --bind-interfaces --interface=eth0 --port=53 --no-resolv --domain="$SRV_CN" --keep-in-foreground --log-facility=-
+"$DNSMASQ_BIN" --bind-interfaces --interface="$VPN_IFACE" --port=53 --no-resolv --local-service --domain="$SRV_CN" --keep-in-foreground --log-facility=-
 _EOF_
 fi
 
 dnsmasq_service() {
-    if [[ "$DNSMASQ_ENABLE" == "true" && "$OCCLIENT_ENABLE" == "true" ]]; then
-        if [[ -e "${SCRIPTS_DIR}"/dnsmasq && -n "$DNSMASQ_CONFIG" ]]; then
+    #if [[ "$DNSMASQ_ENABLE" == "true" && "$OCCLIENT_ENABLE" == "true" ]]; then
+    if [[ "$DNSMASQ_ENABLE" == "true" ]]; then
+        if [[ -e "${SCRIPTS_DIR}"/dnsmasq && -n "$DNSMASQ_LIST" ]]; then
             until ip link show "$OCCLIENT_IFACE" &> /dev/null; do sleep 5; done
             sleep 5
             "${SCRIPTS_DIR}"/dnsmasq
         else
-            echo "Varibale DNSMASQ_CONFIG is not defined or dnsmasq script not exists"
+            echo "Varibale DNSMASQ_LIST is not defined or dnsmasq script not exists"
         fi
     fi
 }
 
 # Start ocserv service
 if [[ -e "${SSL_DIR}"/live/"${SRV_CN}"/privkey.pem && -e "${SSL_DIR}"/live/"${SRV_CN}"/fullchain.pem && -e "${CERTS_DIR}"/ca-key.pem && -e "${CERTS_DIR}"/ca-cert.pem ]]; then
-    sed -iE "s/^dns.*=.*/dns = $DNS/" "${OCSERV_DIR}"/ocserv.conf
+    sed -i '/^dns\s*=.*/d' "${OCSERV_DIR}/ocserv.conf"
+    {
+        echo "dns = $DNS1"
+        [[ -n "${DNS2:-}" ]] && echo "dns = $DNS2"
+    } >> "${OCSERV_DIR}/ocserv.conf"
     pam_otp &> /proc/1/fd/1
     openconnect_client &> /proc/1/fd/1 &
     dnsmasq_service &> /proc/1/fd/1 &
@@ -898,7 +993,7 @@ else
         certtool --generate-privkey --outfile "${SSL_DIR}"/live/"${SRV_CN}"/privkey.pem
         certtool --generate-certificate --load-privkey "${SSL_DIR}"/live/"${SRV_CN}"/privkey.pem --load-ca-certificate "${CERTS_DIR}"/ca-cert.pem --load-ca-privkey "${CERTS_DIR}"/ca-key.pem --template "${SSL_DIR}"/server.tmpl --outfile "${SSL_DIR}"/live/"${SRV_CN}"/fullchain.pem
     fi
-    sed -iE "s/^dns.*=.*/dns = $DNS/" "${OCSERV_DIR}"/ocserv.conf
+    sed -i "s/^dns.*=.*/dns = $DNS1/" "${OCSERV_DIR}"/ocserv.conf
     pam_otp &> /proc/1/fd/1 &
     openconnect_client &> /proc/1/fd/1 &
     dnsmasq_service &> /proc/1/fd/1 &

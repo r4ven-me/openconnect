@@ -1,0 +1,13 @@
+[Unit]
+Description=OpenConnect client service
+Requires=docker.service
+After=docker.service
+Before=openconnect.service
+
+[Service]
+Restart=always
+RestartSec=5
+ExecStart=/usr/bin/bash -c 'set -a; source /opt/openconnect/.env; set +a; /opt/openconnect/data/scripts/occlient start'
+
+[Install]
+WantedBy=multi-user.target

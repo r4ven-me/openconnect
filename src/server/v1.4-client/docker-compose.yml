@@ -30,7 +30,7 @@ services:
     image: r4venme/openconnect:v1.4-client
     container_name: openconnect
     restart: always
-    cpus: 0.5
+    cpus: 1
     mem_limit: 512M
     cap_add:
       - NET_ADMIN
@@ -42,6 +42,7 @@ services:
       - ./data:/etc/ocserv
       # - ./ocserv1.p12:/etc/openconnect/ocserv1.p12
       # - ./ocserv2.p12:/etc/openconnect/ocserv2.p12
+      # - /etc/iproute2/rt_tables:/etc/iproute2/rt_tables
       #- /etc/passwd:/etc/passwd:ro
       #- /etc/group:/etc/group:ro
       #- /etc/shadow:/etc/shadow:ro
@@ -50,6 +51,7 @@ services:
       - /dev/vhost-net:/dev/vhost-net
     ports:
       - ${SRV_PORT}:443/tcp
+    # network_mode: host
 
   # certbot_renew:
   #   depends_on:
