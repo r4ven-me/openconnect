@@ -15,7 +15,7 @@ services:
   #     - ./data/ocserv/ssl:/etc/letsencrypt
   #   entrypoint: >
   #     sh -c "
-  #       certbot certonly --non-interactive --keep-until-expiring --standalone --preferred-challenges http --agree-tos --email ${USER_EMAIL} -d ${SRV_CN};
+  #       certbot certonly --non-interactive --keep-until-expiring --standalone --preferred-challenges http --agree-tos --email ${USER_EMAIL} -d ${SRV_CN}; exit 0;
   #     "
   #   ports:
   #     - "80:80"
