@@ -40,6 +40,7 @@ OCCLIENT_TYPE="${OCCLIENT_TYPE:=dcoker}"
 
 # Dnsmasq
 DNSMASQ_ENABLE="${DNSMASQ_ENABLE:=false}"
+DNSMASQ_TUNNEL_DNS="${DNSMASQ_TUNNEL_DNS:=flase}"
 
 # Create certs dirs
 for sub_dir in "${OCSERV_DIR}"/{"ssl/live/${SRV_CN}","certs","secrets","scripts","config-per-user"}; do
@@ -174,31 +175,20 @@ cat << '_EOF_' > "${SCRIPTS_DIR}"/connect && chmod +x "${SCRIPTS_DIR}"/connect
 
 set -Eeuo pipefail
 
-while ip rule del from "${IP_REMOTE}"/32 table 430 &> /dev/null; do sleep 2; done
-
 MAIN_IFACE=$(ip route | awk '/default/ {print $5; exit}')
 
 echo "$(date) User ${USERNAME} Connected - Server: ${IP_REAL_LOCAL} VPN IP: ${IP_REMOTE}  Remote IP: ${IP_REAL} Device:${DEVICE}"
 echo "Running nftables MASQUERADE for User ${USERNAME} connected with VPN IP ${IP_REMOTE}"
 
-# Ensure nftables nat table and POSTROUTING chain exist (works even if interfaces are down)
-if ! nft list table inet nat &> /dev/null; then
-    nft add table inet nat
-fi
-
-if ! nft list chain inet nat POSTROUTING &> /dev/null; then
-    nft "add chain inet nat POSTROUTING { type nat hook postrouting priority 100 ; policy accept ; }"
-fi
-
 if [[ "$OCCLIENT_ENABLE" == "true" ]] && ip link show "$OCCLIENT_IFACE" &> /dev/null; then
     if [[ "$DNSMASQ_ENABLE" != "true" ]]; then
         ip rule add from "${IP_REMOTE}"/32 table 430 || true
-        nft add rule inet nat POSTROUTING ip saddr "${IP_REMOTE}"/32 oifname "$OCCLIENT_IFACE" counter masquerade comment "masq-${IP_REMOTE}" || true
+        nft add rule ip oc_nat POSTROUTING ip saddr "${IP_REMOTE}"/32 oifname "$OCCLIENT_IFACE" counter masquerade comment "masq-${IP_REMOTE}" || true
     else
-        nft add rule inet nat POSTROUTING ip saddr "${IP_REMOTE}"/32 oifname "$MAIN_IFACE" counter masquerade comment "masq-${IP_REMOTE}" || true
+        nft add rule ip oc_nat POSTROUTING ip saddr "${IP_REMOTE}"/32 oifname "$MAIN_IFACE" counter masquerade comment "masq-${IP_REMOTE}" || true
     fi
 else
-    nft add rule inet nat POSTROUTING ip saddr "${IP_REMOTE}"/32 oifname "$MAIN_IFACE" counter masquerade comment "masq-${IP_REMOTE}" || true
+    nft add rule ip oc_nat POSTROUTING ip saddr "${IP_REMOTE}"/32 oifname "$MAIN_IFACE" counter masquerade comment "masq-${IP_REMOTE}" || true
 fi
 _EOF_
 fi
@@ -212,32 +202,23 @@ set -Eeuo pipefail
 
 echo "$(date) User ${USERNAME} Disconnected - Bytes In: ${STATS_BYTES_IN} Bytes Out: ${STATS_BYTES_OUT} Duration:${STATS_DURATION}"
 
-# Ensure nftables nat table exists (for rule deletion)
-if ! nft list table inet nat &> /dev/null; then
-    nft add table inet nat
-fi
-
-if ! nft list chain inet nat POSTROUTING &> /dev/null; then
-    nft add chain inet nat POSTROUTING { type nat hook postrouting priority 100 \; policy accept \; }
-fi
-
-# Delete the exact MASQUERADE rule by comment (works regardless of oifname)
+# Delete the exact MASQUERADE rule by comment
 if [[ -n "${IP_REMOTE}" ]]; then
-    handles=($(nft -a list chain inet nat POSTROUTING 2>/dev/null \
+    handles=($(nft -a list chain ip oc_nat POSTROUTING 2>/dev/null \
     | grep "comment \"masq-${IP_REMOTE}\"" \
     | grep -o 'handle [0-9]*' \
     | awk '{print $2}'))
 
     if (( ${#handles[@]} )); then
         for rule in "${handles[@]}"; do
-            nft delete rule inet nat POSTROUTING handle "$rule" 2>/dev/null || true
+            nft delete rule ip oc_nat POSTROUTING handle "$rule" 2>/dev/null || true
         done
     fi
 fi
 
 if [[ "$OCCLIENT_ENABLE" == "true" ]] && ip link show "$OCCLIENT_IFACE" &> /dev/null; then
     if [[ "$DNSMASQ_ENABLE" != "true" ]]; then
-        ip rule del from "${IP_REMOTE}"/32 table 430 || true
+        while ip rule del from "${IP_REMOTE}"/32 table 430 &> /dev/null; do sleep 2; done
     fi
 fi
 _EOF_
@@ -516,6 +497,35 @@ pam_otp() {
     fi
 }
 
+# Configure nftables for OpenConnect client and Dnsmasq
+prepare_nft() {
+    echo "Configure tables and chains..."
+
+    if ! nft list table ip oc_nat &> /dev/null; then
+        nft add table ip oc_nat
+    fi
+
+    if ! nft list set ip oc_nat oc_set &> /dev/null; then
+        nft add set ip oc_nat oc_set '{ type ipv4_addr; flags timeout; timeout 86400s; }'
+    fi
+
+    if ! nft list chain ip oc_nat PREROUTING &> /dev/null; then
+        nft add chain ip oc_nat PREROUTING '{ type filter hook prerouting priority -100; policy accept; }'
+    fi
+
+    if ! nft list chain ip oc_nat FORWARD &> /dev/null; then
+        nft add chain ip oc_nat FORWARD '{ type filter hook forward priority -1; policy accept; }'
+    fi
+
+    if ! nft list chain ip oc_nat OUTPUT &> /dev/null; then
+        nft add chain ip oc_nat OUTPUT '{ type filter hook output priority -200; policy accept; }'
+    fi
+
+    if ! nft list chain ip oc_nat POSTROUTING &> /dev/null; then
+        nft add chain ip oc_nat POSTROUTING '{ type nat hook postrouting priority 100; policy accept; }'
+    fi
+}
+
 # Setup OpenConnect client
 if [[ "$OCCLIENT_ENABLE" == "true" && ! -e "${SCRIPTS_DIR}"/occlient ]]; then
 cat << '_EOF_' > "${SCRIPTS_DIR}"/occlient && chmod +x "${SCRIPTS_DIR}"/occlient
@@ -531,8 +541,6 @@ export PATH="/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin"
 
 # ================= CONFIG =================
 
-LOG_TO_STDOUT="${OCCLIENT_LOG:-true}" 
-
 VPN_IFACE="${OCCLIENT_IFACE:-tun0}"
 VPN_BIN="$(command -v openconnect || true)"
 VPN_VPNC_SCRIPT="/usr/bin/bash -c 'CISCO_SPLIT_INC=0 INTERNAL_IP4_DNS= exec /usr/share/vpnc-scripts/vpnc-script'"
@@ -547,10 +555,7 @@ CHECK_UTILS=("flock" "ping" "timeout")
 log_pipe() {
     while IFS= read -r line; do
         local log_line="[occlient] $line"
-        
-        if [[ "$LOG_TO_STDOUT" == "true" ]]; then
-            echo "$log_line"
-        fi
+        echo "$log_line"
     done
 }
 
@@ -647,7 +652,7 @@ connect_post_down_cmd() {
 check_cmd() {
     if
         ip link show "$VPN_IFACE" &> /dev/null && \
-            timeout 6 ping -c 1 -W 5 "$CHECK_HOST" &> /dev/null
+            timeout 6 ping -I "$VPN_IFACE" -c 1 -W 5 "$CHECK_HOST" &> /dev/null
     then
         return 0
     else
@@ -812,58 +817,56 @@ openconnect_client() {
 }
 
 # Setup Dnsmasq
-if [[ "$DNSMASQ_ENABLE" == "true" && ! -e "${SCRIPTS_DIR}"/dnsmasq ]]; then
-cat << '_EOF_' > "${SCRIPTS_DIR}"/dnsmasq && chmod +x "${SCRIPTS_DIR}"/dnsmasq
+if [[ "$DNSMASQ_ENABLE" == "true" && ! -e "${SCRIPTS_DIR}"/ocdnsmasq ]]; then
+cat << '_EOF_' > "${SCRIPTS_DIR}"/ocdnsmasq && chmod +x "${SCRIPTS_DIR}"/ocdnsmasq
 #!/usr/bin/env bash
 
 set -Eeuo pipefail
 
-# Check for root privileges
-if [[ $EUID -ne 0 ]]; then
-    echo "Error: this script must be run as root (EUID=$EUID)"
-    exit 1
-fi
-
 export PATH="/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin"
 
-# ================= CONFIG =================
-
-LOG_TO_STDOUT="${DNSMASQ_LOG:-true}"
 VPN_IFACE="${OCCLIENT_IFACE:-tun0}"
-DNSMASQ_BIN="$(command -v dnsmasq || true)"
-
-REQUIRED_UTILS=("ip" "nft")
-
-# ================= LOGGING =================
+VPN_IPV4_NET="${IPV4_NET:-}"
 
 log_pipe() {
     while IFS= read -r line; do
         local log_line="[dnsmasq] $line"
-        if [[ "$LOG_TO_STDOUT" == "true" ]]; then
-            echo "$log_line"
-        fi
+        echo "$log_line"
     done
 }
 
 exec > >(log_pipe) 2>&1
 
-# ================= CHECKS =================
+convert_domains() {
+    local list="/etc/ocserv/domains.txt"
+    local conf="/etc/dnsmasq.d/oc_set.conf"
+    local tmp
 
-: "${OCSERV_DIR:?OCSERV_DIR is required}"
-: "${DNSMASQ_LIST:?DNSMASQ_LIST is required}"
-: "${SRV_CN:?SRV_CN is required}"
+    tmp=$(mktemp)
 
-[[ -n "$DNSMASQ_BIN" ]] || {
-    echo "Error: dnsmasq not found in PATH"
-    exit 1
+    while IFS= read -r domain; do
+        [[ -z "$domain" || "$domain" =~ ^# ]] && continue
+        echo "nftset=/$domain/ip#oc_nat#oc_set"
+    done < "$list" > "$tmp"
+
+    mv "$tmp" "$conf"
 }
 
-for util in "${REQUIRED_UTILS[@]}"; do
-    command -v "$util" &> /dev/null || {
-        echo "Error: required utility not found: $util"
-        exit 1
-    }
-done
+update_domains() {
+    local list="/etc/ocserv/domains.txt"
+
+    [[ -e "$list" ]] || touch "$list"
+    convert_domains
+
+    while true; do
+        inotifywait -e modify -e close_write -e delete_self "$list" 2> /dev/null
+        sleep 0.1
+        if [[ -f "$list" ]]; then
+            convert_domains
+            kill -TERM $(< /var/run/dnsmasq.pid) 2> /dev/null
+        fi
+    done
+}
 
 echo "Using VPN interface: $VPN_IFACE"
 
@@ -877,7 +880,6 @@ if ! grep -q "431 dnsmasq" /etc/iproute2/rt_tables &> /dev/null; then
     echo "431 dnsmasq" >> /etc/iproute2/rt_tables
 fi
 
-# MAIN_IFACE=$(ip route | awk '/default/ {print $5; exit}')
 DNS_IP=$(ip -4 addr show "$VPN_IFACE" | grep -o 'inet [0-9.]*' | cut -d' ' -f2 || echo "")
 
 if [[ -n "$DNS_IP" ]]; then
@@ -893,79 +895,95 @@ else
     echo "Warning: could not determine main IP on $MAIN_IFACE"
 fi
 
-# ================= NETWORK SETUP =================
-
-# Ensure tables exist
-for tbl in mangle nat; do
-    if ! nft list table inet "$tbl" &> /dev/null; then
-        nft add table inet "$tbl"
-    fi
-done
-
-# PREROUTING (incoming / forwarded traffic)
-if ! nft list chain inet mangle PREROUTING &> /dev/null; then
-    nft add chain inet mangle PREROUTING "{ type filter hook prerouting priority mangle; policy accept; }"
-fi
-
-# OUTPUT (local traffic routing decision hook)
-if ! nft list chain inet mangle OUTPUT &> /dev/null; then
-    nft add chain inet mangle OUTPUT "{ type route hook output priority mangle; policy accept; }"
-fi
-
-# NAT POSTROUTING
-if ! nft list chain inet nat POSTROUTING &> /dev/null; then
-    nft add chain inet nat POSTROUTING "{ type nat hook postrouting priority srcnat; policy accept; }"
-fi
-
-# Set for DNS domains resolved via dnsmasq
-if ! nft list set inet mangle tunnelset &> /dev/null; then
-    nft add set inet mangle tunnelset "{ type ipv4_addr; flags timeout; timeout 86400s; }"
-fi
-
 echo "Configuring nftables rules..."
 
-# MARK + CONNTRACK (CRITICAL PART)
 for chain in PREROUTING OUTPUT; do
-    if ! nft list chain inet mangle "$chain" 2> /dev/null | grep -q "tunnelset"; then
-        nft add rule inet mangle "$chain" ip daddr @tunnelset ct mark set 0x1 meta mark set ct mark
+    if ! nft list chain ip oc_nat "$chain" 2> /dev/null | grep -q "oc_set"; then
+        nft add rule ip oc_nat "$chain" ip daddr @oc_set ct mark set 0x1 meta mark set ct mark
     fi
 done
 
-# MASQUERADE for VPN-marked traffic
-if ! nft list chain inet nat POSTROUTING 2> /dev/null | grep -q "0x00000001"; then
-    nft add rule inet nat POSTROUTING meta mark 0x1 oifname "$VPN_IFACE" counter masquerade comment "dnsmasq-tunnel-masq"
+if ! nft list chain ip oc_nat POSTROUTING 2> /dev/null | grep -q "0x00000001"; then
+    nft add rule ip oc_nat POSTROUTING meta mark 0x1 oifname "$VPN_IFACE" counter masquerade
+fi
+
+for target in saddr daddr; do
+    if ! nft list chain ip oc_nat FORWARD 2> /dev/null | grep -q "$target ${VPN_IPV4_NET}/24 accept"; then
+        nft add rule ip oc_nat FORWARD ip "$target" "${VPN_IPV4_NET}"/24 accept
+    fi
+done
+
+if nft list table ip filter &> /dev/null; then
+    for target in saddr daddr; do
+        if ! nft list chain ip filter DOCKER-USER 2> /dev/null | grep -q "$target ${VPN_IPV4_NET}/24 accept"; then
+            nft add rule ip filter DOCKER-USER ip "$target" "${VPN_IPV4_NET}"/24 accept
+        fi
+    done
 fi
 
 echo "Configuring routing rules..."
-ip rule show | grep -q "fwmark 0x1 lookup dnsmasq" || \
-    ip rule add fwmark 0x1 table 431 priority 100 || true
 
-ip route show table 431 default 2> /dev/null | grep -q "$VPN_IFACE" || \
+if ! ip rule show | grep -q "fwmark 0x1 lookup dnsmasq"; then
+    ip rule add fwmark 0x1 table 431 priority 100 || true
+fi
+
+if ! ip route show table 431 default 2> /dev/null | grep -q "$VPN_IFACE"; then
     ip route add default dev "$VPN_IFACE" table 431 || true
+fi
+
+if [[ "$DNSMASQ_TUNNEL_DNS" == "true" ]]; then
+    echo "All DNS requests will be tunneling to $VPN_IFACE"
+
+    for dns in "$DNS1" "$DNS2"; do
+        if [[ -n "$dns" ]]; then
+            if ! ip route show | grep -q "$dns.*dev.*$VPN_IFACE"; then
+                ip route add "$dns" dev "$VPN_IFACE" || true
+            fi
+        else
+            echo "Error: DNS1 or DNS2 variable is not defined"
+        fi
+    done
+else
+    for dns in "$DNS1" "$DNS2"; do
+        if [[ -n "$dns" ]]; then
+            if ip route show | grep -q "$dns.*dev.*$VPN_IFACE"; then
+                ip route delete "$dns" dev "$VPN_IFACE" || true
+            fi
+        fi
+    done
+fi
 
 # ================= RUN =================
 
-printf "server=%s\nserver=%s\n" "${DNS1:-8.8.8.8}" "${DNS2:-8.8.4.4}" >> /etc/dnsmasq.conf
+echo "Watching /etc/ocserv/domains.txt for updates..."
+update_domains &
 
-echo "$DNSMASQ_LIST" | \
-  grep -v '^[[:space:]]*$' | \
-  while read -r domain; do
-    domain=$(echo "$domain" | xargs)
-    [[ -n "$domain" ]] && printf "nftset=/%s/4#inet#mangle#tunnelset\n" "$domain"
-  done >> /etc/dnsmasq.conf
+sleep 1
+
+printf "conf-dir=/etc/dnsmasq.d\nserver=%s\nserver=%s\n" "${DNS1:-8.8.8.8}" "${DNS2:-8.8.4.4}" >> /etc/dnsmasq.conf
+
+if [[ -n "$DNSMASQ_LIST" ]]; then
+    echo "$DNSMASQ_LIST" | \
+        grep -v '^[[:space:]]*$' | \
+        while read -r domain; do
+            domain=$(echo "$domain" | xargs)
+            [[ -n "$domain" ]] && printf "nftset=/%s/4#ip#oc_nat#oc_set\n" "$domain"
+        done >> /etc/dnsmasq.conf
+fi
 
 echo "Starting dnsmasq in foreground..."
-"$DNSMASQ_BIN" --bind-interfaces --interface="$VPN_IFACE" --port=53 --no-resolv --local-service --domain="$SRV_CN" --keep-in-foreground --log-facility=-
+
+while true; do dnsmasq --conf-file=/etc/dnsmasq.conf --bind-interfaces --interface="$VPN_IFACE" --port=53 --no-resolv --local-service --domain="$SRV_CN" --keep-in-foreground --log-facility=-; done
 _EOF_
 fi
 
 dnsmasq_service() {
     #if [[ "$DNSMASQ_ENABLE" == "true" && "$OCCLIENT_ENABLE" == "true" ]]; then
     if [[ "$DNSMASQ_ENABLE" == "true" ]]; then
-        if [[ -e "${SCRIPTS_DIR}"/dnsmasq && -n "$DNSMASQ_LIST" ]]; then
+        if [[ -e "${SCRIPTS_DIR}"/ocdnsmasq && -n "$DNSMASQ_LIST" ]]; then
             until ip link show "$OCCLIENT_IFACE" &> /dev/null; do sleep 5; done
             sleep 5
-            "${SCRIPTS_DIR}"/dnsmasq
+            "${SCRIPTS_DIR}"/ocdnsmasq
         else
             echo "Varibale DNSMASQ_LIST is not defined or dnsmasq script not exists"
         fi
@@ -980,6 +998,7 @@ if [[ -e "${SSL_DIR}"/live/"${SRV_CN}"/privkey.pem && -e "${SSL_DIR}"/live/"${SR
         [[ -n "${DNS2:-}" ]] && echo "dns = $DNS2"
     } >> "${OCSERV_DIR}/ocserv.conf"
     pam_otp &> /proc/1/fd/1
+    prepare_nft &> /proc/1/fd/1
     openconnect_client &> /proc/1/fd/1 &
     dnsmasq_service &> /proc/1/fd/1 &
     echo "Starting OpenConnect Server"
@@ -995,6 +1014,7 @@ else
     fi
     sed -i "s/^dns.*=.*/dns = $DNS1/" "${OCSERV_DIR}"/ocserv.conf
     pam_otp &> /proc/1/fd/1 &
+    prepare_nft &> /proc/1/fd/1
     openconnect_client &> /proc/1/fd/1 &
     dnsmasq_service &> /proc/1/fd/1 &
     echo "Starting OpenConnect Server"

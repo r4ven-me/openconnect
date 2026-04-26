@@ -119,7 +119,8 @@ RUN --mount=type=bind,target=/src,source=./ \
         msmtp \
         nftables \
         dnsmasq \
-        openconnect && \
+        openconnect \
+        inotify-tools && \
     apt autoremove --yes && \
     apt clean --yes && \
     rm -rf /var/lib/{apt,dpkg,cache,log}/*
@@ -155,7 +156,9 @@ ENV MSMTP_PASSWORD="PaSsw0rD"
 ENV MSMTP_FROM="mail@example.com"
 ENV TG_TOKEN="1234567890:QWERTYuio-PA1DFGHJ2_KlzxcVBNmqWEr3t"
 ENV OCCLIENT_ENABLE=false
+ENV OCCLIENT_TYPE="dcoker"
 ENV DNSMASQ_ENABLE=false
+ENV DNSMASQ_TUNNEL_DNS=false
 
 WORKDIR $OCSERV_DIR
 
