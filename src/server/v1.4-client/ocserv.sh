@@ -626,34 +626,6 @@ kill_vpn_pid() {
     fi
 }
 
-prepare_nft() {
-    echo "Configure tables and chains..."
-
-    if ! nft list table ip oc_nat &> /dev/null; then
-        nft add table ip oc_nat
-    fi
-
-    if ! nft list set ip oc_nat oc_set &> /dev/null; then
-        nft add set ip oc_nat oc_set '{ type ipv4_addr; flags timeout; timeout 86400s; }'
-    fi
-
-    if ! nft list chain ip oc_nat PREROUTING &> /dev/null; then
-        nft add chain ip oc_nat PREROUTING '{ type filter hook prerouting priority -100; policy accept; }'
-    fi
-
-    if ! nft list chain ip oc_nat FORWARD &> /dev/null; then
-        nft add chain ip oc_nat FORWARD '{ type filter hook forward priority -1; policy accept; }'
-    fi
-
-    if ! nft list chain ip oc_nat OUTPUT &> /dev/null; then
-        nft add chain ip oc_nat OUTPUT '{ type filter hook output priority -200; policy accept; }'
-    fi
-
-    if ! nft list chain ip oc_nat POSTROUTING &> /dev/null; then
-        nft add chain ip oc_nat POSTROUTING '{ type nat hook postrouting priority 100; policy accept; }'
-    fi
-}
-
 connect_cmd(){
     echo "Connecting to VPN $VPN_ADDRESS:$VPN_PORT (iface=$VPN_IFACE)..."
     
@@ -808,8 +780,6 @@ main() {
         }
     done
 
-    prepare_nft
-
     load_vpn_profile
 
     if ! connect_cmd; then
@@ -863,6 +833,7 @@ export PATH="/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin"
 
 VPN_IFACE="${OCCLIENT_IFACE:-tun0}"
 VPN_IPV4_NET="${IPV4_NET:-}"
+VPN_ROUTES=()
 [[ -z "$CUSTOM_ROUTES" ]] || mapfile -t VPN_ROUTES <<< "$CUSTOM_ROUTES"
 
 until ip link show "$VPN_IFACE" &> /dev/null; do sleep 5; done
@@ -1067,6 +1038,34 @@ dnsmasq --conf-file=/etc/dnsmasq.conf --bind-interfaces --interface="$VPN_IFACE"
 _EOF_
 fi
 
+prepare_nft() {
+    echo "Configure tables and chains..."
+
+    if ! nft list table ip oc_nat &> /dev/null; then
+        nft add table ip oc_nat
+    fi
+
+    if ! nft list set ip oc_nat oc_set &> /dev/null; then
+        nft add set ip oc_nat oc_set '{ type ipv4_addr; flags timeout; timeout 86400s; }'
+    fi
+
+    if ! nft list chain ip oc_nat PREROUTING &> /dev/null; then
+        nft add chain ip oc_nat PREROUTING '{ type filter hook prerouting priority -100; policy accept; }'
+    fi
+
+    if ! nft list chain ip oc_nat FORWARD &> /dev/null; then
+        nft add chain ip oc_nat FORWARD '{ type filter hook forward priority -1; policy accept; }'
+    fi
+
+    if ! nft list chain ip oc_nat OUTPUT &> /dev/null; then
+        nft add chain ip oc_nat OUTPUT '{ type filter hook output priority -200; policy accept; }'
+    fi
+
+    if ! nft list chain ip oc_nat POSTROUTING &> /dev/null; then
+        nft add chain ip oc_nat POSTROUTING '{ type nat hook postrouting priority 100; policy accept; }'
+    fi
+}
+
 # Config OTP with PAM
 pam_otp() {
     if [[ "$OTP_ENABLE" == "true" ]]; then
@@ -1107,6 +1106,7 @@ if [[ -e "${SSL_DIR}"/live/"${SRV_CN}"/privkey.pem && -e "${SSL_DIR}"/live/"${SR
         echo "dns = $DNS1"
         [[ -n "${DNS2:-}" ]] && echo "dns = $DNS2"
     } >> "${OCSERV_DIR}/ocserv.conf"
+    prepare_nft
     pam_otp &> /proc/1/fd/1
     openconnect_client || export OCCLIENT_ENABLE=false
     dnsmasq_service || export DNSMASQ_ENABLE=false
@@ -1122,6 +1122,7 @@ else
         certtool --generate-certificate --load-privkey "${SSL_DIR}"/live/"${SRV_CN}"/privkey.pem --load-ca-certificate "${CERTS_DIR}"/ca-cert.pem --load-ca-privkey "${CERTS_DIR}"/ca-key.pem --template "${SSL_DIR}"/server.tmpl --outfile "${SSL_DIR}"/live/"${SRV_CN}"/fullchain.pem
     fi
     sed -i "s/^dns.*=.*/dns = $DNS1/" "${OCSERV_DIR}"/ocserv.conf
+    prepare_nft
     pam_otp &> /proc/1/fd/1 &
     openconnect_client || export OCCLIENT_ENABLE=false
     dnsmasq_service || export DNSMASQ_ENABLE=false
