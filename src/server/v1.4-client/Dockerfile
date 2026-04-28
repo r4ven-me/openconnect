@@ -120,7 +120,8 @@ RUN --mount=type=bind,target=/src,source=./ \
         nftables \
         dnsmasq \
         openconnect \
-        inotify-tools && \
+        inotify-tools \
+        supervisor && \
     apt autoremove --yes && \
     apt clean --yes && \
     rm -rf /var/lib/{apt,dpkg,cache,log}/*
@@ -159,12 +160,15 @@ ENV OCCLIENT_ENABLE=false
 ENV OCCLIENT_TYPE="dcoker"
 ENV DNSMASQ_ENABLE=false
 ENV DNSMASQ_TUNNEL_DNS=false
+ENV CUSTOM_ROUTES=""
 
 WORKDIR $OCSERV_DIR
 
 ENTRYPOINT ["/ocserv.sh"]
 
-CMD ["/usr/bin/tini", "--", "/usr/local/sbin/ocserv", "--config", "/etc/ocserv/ocserv.conf", "--foreground"]
+CMD ["/usr/bin/supervisord", "--configuration", "/etc/supervisord.conf", "--nodaemon"]
+
+# CMD ["/usr/bin/tini", "--", "/usr/local/sbin/ocserv", "--config", "/etc/ocserv/ocserv.conf", "--foreground"]
 
 HEALTHCHECK --interval=5m --timeout=3s \
     CMD curl -k https://localhost:443/ || exit 1

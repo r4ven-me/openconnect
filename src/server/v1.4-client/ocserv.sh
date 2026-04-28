@@ -41,6 +41,7 @@ OCCLIENT_TYPE="${OCCLIENT_TYPE:=dcoker}"
 # Dnsmasq
 DNSMASQ_ENABLE="${DNSMASQ_ENABLE:=false}"
 DNSMASQ_TUNNEL_DNS="${DNSMASQ_TUNNEL_DNS:=flase}"
+CUSTOM_ROUTES="${CUSTOM_ROUTES:-}"
 
 # Create certs dirs
 for sub_dir in "${OCSERV_DIR}"/{"ssl/live/${SRV_CN}","certs","secrets","scripts","config-per-user"}; do
@@ -54,6 +55,66 @@ for example_file in ocserv.conf_example env_example; do
         cp /usr/share/doc/ocserv/"${example_file}" "${OCSERV_DIR}"/
     fi
 done
+
+# Create supervisor config file
+if [[ ! -e /etc/supervisord.conf ]]; then
+cat << _EOF_ > /etc/supervisord.conf
+[supervisord]
+user=root
+nodaemon=true
+logfile=/dev/null
+pidfile=/run/supervisord.pid
+stopsignal=TERM
+
+[program:ocserv]
+command=/usr/local/sbin/ocserv --config /etc/ocserv/ocserv.conf --foreground
+priority=1
+autostart=true
+autorestart=true
+startsecs=10
+startretries=5
+stdout_logfile=/dev/stdout
+stdout_logfile_maxbytes=0
+stderr_logfile=/dev/stderr
+stderr_logfile_maxbytes=0
+stopsignal=TERM
+stopwaitsecs=10
+killasgroup=true
+stopasgroup=true
+
+[program:occlient]
+command="${SCRIPTS_DIR}"/occlient start
+priority=10
+autostart=%(ENV_OCCLIENT_ENABLE)s
+autorestart=true
+startsecs=10
+startretries=5
+stdout_logfile=/dev/stdout
+stdout_logfile_maxbytes=0
+stderr_logfile=/dev/stderr
+stderr_logfile_maxbytes=0
+stopsignal=TERM
+stopwaitsecs=10
+killasgroup=true
+stopasgroup=true
+
+[program:dnsmasq]
+command="${SCRIPTS_DIR}"/ocdnsmasq
+priority=20
+autostart=%(ENV_DNSMASQ_ENABLE)s
+autorestart=true
+startsecs=10
+startretries=5
+stdout_logfile=/dev/stdout
+stdout_logfile_maxbytes=0
+stderr_logfile=/dev/stderr
+stderr_logfile_maxbytes=0
+stopsignal=TERM
+stopwaitsecs=10
+killasgroup=true
+stopasgroup=true
+_EOF_
+fi
 
 # Create ocserv config file
 if [[ ! -e "${OCSERV_DIR}"/ocserv.conf ]]; then
@@ -181,9 +242,10 @@ echo "$(date) User ${USERNAME} Connected - Server: ${IP_REAL_LOCAL} VPN IP: ${IP
 echo "Running nftables MASQUERADE for User ${USERNAME} connected with VPN IP ${IP_REMOTE}"
 
 if [[ "$OCCLIENT_ENABLE" == "true" ]] && ip link show "$OCCLIENT_IFACE" &> /dev/null; then
+    nft add rule ip oc_nat POSTROUTING ip saddr "${IP_REMOTE}"/32 oifname "$OCCLIENT_IFACE" counter masquerade comment "masq-${IP_REMOTE}" || true
+    
     if [[ "$DNSMASQ_ENABLE" != "true" ]]; then
         ip rule add from "${IP_REMOTE}"/32 table 430 || true
-        nft add rule ip oc_nat POSTROUTING ip saddr "${IP_REMOTE}"/32 oifname "$OCCLIENT_IFACE" counter masquerade comment "masq-${IP_REMOTE}" || true
     else
         nft add rule ip oc_nat POSTROUTING ip saddr "${IP_REMOTE}"/32 oifname "$MAIN_IFACE" counter masquerade comment "masq-${IP_REMOTE}" || true
     fi
@@ -486,46 +548,6 @@ logfile $OCSERV_DIR/pam.log
 _EOF_
 fi
 
-# Config OTP with PAM
-pam_otp() {
-    if [[ "$OTP_ENABLE" == "true" ]]; then
-        until [[ -e /etc/pam.d/ocserv ]]; do sleep 5; done
-        if grep -q 'otp_sender' /etc/pam.d/ocserv && grep -q 'users.oath' /etc/pam.d/ocserv; then return 0; fi
-        sleep 3
-        echo "auth optional pam_exec.so ${SCRIPTS_DIR}/otp_sender" >> /etc/pam.d/ocserv
-        echo "auth requisite pam_oath.so debug usersfile=${SECRETS_DIR}/users.oath window=20" >> /etc/pam.d/ocserv
-    fi
-}
-
-# Configure nftables for OpenConnect client and Dnsmasq
-prepare_nft() {
-    echo "Configure tables and chains..."
-
-    if ! nft list table ip oc_nat &> /dev/null; then
-        nft add table ip oc_nat
-    fi
-
-    if ! nft list set ip oc_nat oc_set &> /dev/null; then
-        nft add set ip oc_nat oc_set '{ type ipv4_addr; flags timeout; timeout 86400s; }'
-    fi
-
-    if ! nft list chain ip oc_nat PREROUTING &> /dev/null; then
-        nft add chain ip oc_nat PREROUTING '{ type filter hook prerouting priority -100; policy accept; }'
-    fi
-
-    if ! nft list chain ip oc_nat FORWARD &> /dev/null; then
-        nft add chain ip oc_nat FORWARD '{ type filter hook forward priority -1; policy accept; }'
-    fi
-
-    if ! nft list chain ip oc_nat OUTPUT &> /dev/null; then
-        nft add chain ip oc_nat OUTPUT '{ type filter hook output priority -200; policy accept; }'
-    fi
-
-    if ! nft list chain ip oc_nat POSTROUTING &> /dev/null; then
-        nft add chain ip oc_nat POSTROUTING '{ type nat hook postrouting priority 100; policy accept; }'
-    fi
-}
-
 # Setup OpenConnect client
 if [[ "$OCCLIENT_ENABLE" == "true" && ! -e "${SCRIPTS_DIR}"/occlient ]]; then
 cat << '_EOF_' > "${SCRIPTS_DIR}"/occlient && chmod +x "${SCRIPTS_DIR}"/occlient
@@ -539,6 +561,8 @@ fi
 
 export PATH="/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin"
 
+until ss -tln | grep -qE '^LISTEN.*:443'; do sleep 5; done
+
 # ================= CONFIG =================
 
 VPN_IFACE="${OCCLIENT_IFACE:-tun0}"
@@ -548,7 +572,7 @@ VPN_VPNC_SCRIPT="/usr/bin/bash -c 'CISCO_SPLIT_INC=0 INTERNAL_IP4_DNS= exec /usr
 CHECK_INTERVAL="${OCCLIENT_CHECK_HOST_INTERVAL:-5}" 
 CHECK_THRESHOLD="${OCCLIENT_CHECK_HOST_THRESHOLD:-3}"
 
-CHECK_UTILS=("flock" "ping" "timeout")
+CHECK_UTILS=("flock" "ping" "timeout" "nft")
 
 # ================= LOGGING =================
 
@@ -600,6 +624,34 @@ kill_vpn_pid() {
         wait "$VPN_PID" 2> /dev/null || true
         while ip link show "$VPN_IFACE" &> /dev/null; do sleep 2; done
         sleep 1
+    fi
+}
+
+prepare_nft() {
+    echo "Configure tables and chains..."
+
+    if ! nft list table ip oc_nat &> /dev/null; then
+        nft add table ip oc_nat
+    fi
+
+    if ! nft list set ip oc_nat oc_set &> /dev/null; then
+        nft add set ip oc_nat oc_set '{ type ipv4_addr; flags timeout; timeout 86400s; }'
+    fi
+
+    if ! nft list chain ip oc_nat PREROUTING &> /dev/null; then
+        nft add chain ip oc_nat PREROUTING '{ type filter hook prerouting priority -100; policy accept; }'
+    fi
+
+    if ! nft list chain ip oc_nat FORWARD &> /dev/null; then
+        nft add chain ip oc_nat FORWARD '{ type filter hook forward priority -1; policy accept; }'
+    fi
+
+    if ! nft list chain ip oc_nat OUTPUT &> /dev/null; then
+        nft add chain ip oc_nat OUTPUT '{ type filter hook output priority -200; policy accept; }'
+    fi
+
+    if ! nft list chain ip oc_nat POSTROUTING &> /dev/null; then
+        nft add chain ip oc_nat POSTROUTING '{ type nat hook postrouting priority 100; policy accept; }'
     fi
 }
 
@@ -757,6 +809,8 @@ main() {
         }
     done
 
+    prepare_nft
+
     load_vpn_profile
 
     if ! connect_cmd; then
@@ -799,23 +853,6 @@ esac
 _EOF_
 fi
 
-openconnect_client() {
-    if [[ "$OCCLIENT_ENABLE" == "true" &&  -e "${SCRIPTS_DIR}"/occlient ]]; then
-        if [[ -n "$OCCLIENT_0_SERVER" && -n "$OCCLIENT_0_CERT_PASS" && -n "$OCCLIENT_0_CHECK_HOST" ]]; then
-            if [[ "$OCCLIENT_TYPE" == "docker" ]]; then
-                until ss -tln | grep -qE '^LISTEN.*:443'; do sleep 5; done
-                sleep 2
-                "${SCRIPTS_DIR}"/occlient start
-            elif [[ "$OCCLIENT_TYPE" == "host" ]]; then
-                echo "Using openconnect client in host mode..."
-            fi
-        else
-            echo "Some OCCLIENT_ variables is not defined"
-            return 0
-        fi
-    fi
-}
-
 # Setup Dnsmasq
 if [[ "$DNSMASQ_ENABLE" == "true" && ! -e "${SCRIPTS_DIR}"/ocdnsmasq ]]; then
 cat << '_EOF_' > "${SCRIPTS_DIR}"/ocdnsmasq && chmod +x "${SCRIPTS_DIR}"/ocdnsmasq
@@ -827,6 +864,9 @@ export PATH="/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin"
 
 VPN_IFACE="${OCCLIENT_IFACE:-tun0}"
 VPN_IPV4_NET="${IPV4_NET:-}"
+[[ -z "$CUSTOM_ROUTES" ]] || mapfile -t VPN_ROUTES <<< "$CUSTOM_ROUTES"
+
+until ip link show "$VPN_IFACE" &> /dev/null; do sleep 5; done
 
 log_pipe() {
     while IFS= read -r line; do
@@ -868,6 +908,47 @@ update_domains() {
     done
 }
 
+convert_routes() {
+    local old_list="/etc/ocserv/.routes_old.txt"
+    local old_routes=()
+
+    if [[ -f "$old_list" && -n "$VPN_IFACE" ]]; then
+        mapfile -t old_routes "$old_list"
+
+        for route in "${old_routes[@]}"; do
+            ip route delete "$route" dev "$VPN_IFACE" || true &> /dev/null
+        done
+    fi
+
+    local list="/etc/ocserv/routes.txt"
+    local routes=()
+
+    if [[ -f "$list" && -n "$VPN_IFACE" ]]; then
+        mapfile -t routes < "$list"
+
+        for route in "${routes[@]}"; do
+            ip route add "$route" dev "$VPN_IFACE" || true &> /dev/null
+        done
+
+        cp "$list" "$old_list"
+    fi
+}
+
+update_routes() {
+    local list="/etc/ocserv/routes.txt"
+
+    [[ -e "$list" ]] || touch "$list"
+    convert_routes
+
+    while true; do
+        inotifywait -e modify -e close_write -e delete_self "$list" 2> /dev/null
+        sleep 0.1
+        if [[ -f "$list" ]]; then
+            convert_routes
+        fi
+    done
+}
+
 echo "Using VPN interface: $VPN_IFACE"
 
 if ! ip link show "$VPN_IFACE" &> /dev/null; then
@@ -888,7 +969,7 @@ if [[ -n "$DNS_IP" ]]; then
     else
         echo "dns = $DNS_IP" >> "$OCSERV_DIR/ocserv.conf"
     fi
-    
+
     occtl reload &> /dev/null
     echo "listen-address=${DNS_IP}" > /etc/dnsmasq.conf
 else
@@ -947,13 +1028,23 @@ else
     for dns in "$DNS1" "$DNS2"; do
         if [[ -n "$dns" ]]; then
             if ip route show | grep -q "$dns.*dev.*$VPN_IFACE"; then
-                ip route delete "$dns" dev "$VPN_IFACE" || true
+                ip route delete "$dns" dev "$VPN_IFACE" &> /dev/null || true
             fi
         fi
     done
 fi
 
+if (( ${#VPN_ROUTES[@]} > 0 )) && [[ -n "$VPN_IFACE" ]]; then
+    for route in "${VPN_ROUTES[@]}"; do
+        [[ -z "$route" ]] && continue
+        ip route add "$route" dev "$VPN_IFACE" || true &> /dev/null
+    done
+fi
+
 # ================= RUN =================
+
+echo "Watching /etc/ocserv/routes.txt for updates..."
+update_routes &
 
 echo "Watching /etc/ocserv/domains.txt for updates..."
 update_domains &
@@ -973,19 +1064,45 @@ fi
 
 echo "Starting dnsmasq in foreground..."
 
-while true; do dnsmasq --conf-file=/etc/dnsmasq.conf --bind-interfaces --interface="$VPN_IFACE" --port=53 --no-resolv --local-service --domain="$SRV_CN" --keep-in-foreground --log-facility=-; done
+dnsmasq --conf-file=/etc/dnsmasq.conf --bind-interfaces --interface="$VPN_IFACE" --port=53 --no-resolv --local-service --domain="$SRV_CN" --keep-in-foreground --log-facility=-
 _EOF_
 fi
 
+# Config OTP with PAM
+pam_otp() {
+    if [[ "$OTP_ENABLE" == "true" ]]; then
+        until [[ -e /etc/pam.d/ocserv ]]; do sleep 5; done
+        if grep -q 'otp_sender' /etc/pam.d/ocserv && grep -q 'users.oath' /etc/pam.d/ocserv; then return 0; fi
+        sleep 3
+        echo "auth optional pam_exec.so ${SCRIPTS_DIR}/otp_sender" >> /etc/pam.d/ocserv
+        echo "auth requisite pam_oath.so debug usersfile=${SECRETS_DIR}/users.oath window=20" >> /etc/pam.d/ocserv
+    fi
+}
+
+openconnect_client() {
+    if [[ "$OCCLIENT_ENABLE" == "true" &&  -e "${SCRIPTS_DIR}"/occlient ]]; then
+        if [[ -n "$OCCLIENT_0_SERVER" && -n "$OCCLIENT_0_CERT_PASS" && -n "$OCCLIENT_0_CHECK_HOST" ]]; then
+            if [[ "$OCCLIENT_TYPE" == "docker" ]]; then
+                echo "Using openconnect client in docker mode..."
+                return 0
+            elif [[ "$OCCLIENT_TYPE" == "host" ]]; then
+                echo "Using openconnect client in host mode..."
+                return 1
+            fi
+        else
+            echo "Some OCCLIENT_ variables is not defined"
+            return 1
+        fi
+    fi
+}
+
 dnsmasq_service() {
-    #if [[ "$DNSMASQ_ENABLE" == "true" && "$OCCLIENT_ENABLE" == "true" ]]; then
     if [[ "$DNSMASQ_ENABLE" == "true" ]]; then
         if [[ -e "${SCRIPTS_DIR}"/ocdnsmasq && -n "$DNSMASQ_LIST" ]]; then
-            until ip link show "$OCCLIENT_IFACE" &> /dev/null; do sleep 5; done
-            sleep 5
-            "${SCRIPTS_DIR}"/ocdnsmasq
+            return 0
         else
             echo "Varibale DNSMASQ_LIST is not defined or dnsmasq script not exists"
+            return 1
         fi
     fi
 }
@@ -998,9 +1115,8 @@ if [[ -e "${SSL_DIR}"/live/"${SRV_CN}"/privkey.pem && -e "${SSL_DIR}"/live/"${SR
         [[ -n "${DNS2:-}" ]] && echo "dns = $DNS2"
     } >> "${OCSERV_DIR}/ocserv.conf"
     pam_otp &> /proc/1/fd/1
-    prepare_nft &> /proc/1/fd/1
-    openconnect_client &> /proc/1/fd/1 &
-    dnsmasq_service &> /proc/1/fd/1 &
+    openconnect_client || export OCCLIENT_ENABLE=false
+    dnsmasq_service || export DNSMASQ_ENABLE=false
     echo "Starting OpenConnect Server"
     exec "$@" || { echo "Starting failed" >&2; exit 1; }
 else
@@ -1014,9 +1130,8 @@ else
     fi
     sed -i "s/^dns.*=.*/dns = $DNS1/" "${OCSERV_DIR}"/ocserv.conf
     pam_otp &> /proc/1/fd/1 &
-    prepare_nft &> /proc/1/fd/1
-    openconnect_client &> /proc/1/fd/1 &
-    dnsmasq_service &> /proc/1/fd/1 &
+    openconnect_client || export OCCLIENT_ENABLE=false
+    dnsmasq_service || export DNSMASQ_ENABLE=false
     echo "Starting OpenConnect Server"
     exec "$@" || { echo "Starting failed" >&2; exit 1; }
 fi
