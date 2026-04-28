@@ -36,7 +36,6 @@ SCRIPTS_DIR="${OCSERV_DIR}/scripts"
 
 # Occlient
 OCCLIENT_ENABLE="${OCCLIENT_ENABLE:=false}"
-OCCLIENT_TYPE="${OCCLIENT_TYPE:=dcoker}"
 
 # Dnsmasq
 DNSMASQ_ENABLE="${DNSMASQ_ENABLE:=false}"
@@ -1082,13 +1081,7 @@ pam_otp() {
 openconnect_client() {
     if [[ "$OCCLIENT_ENABLE" == "true" &&  -e "${SCRIPTS_DIR}"/occlient ]]; then
         if [[ -n "$OCCLIENT_0_SERVER" && -n "$OCCLIENT_0_CERT_PASS" && -n "$OCCLIENT_0_CHECK_HOST" ]]; then
-            if [[ "$OCCLIENT_TYPE" == "docker" ]]; then
-                echo "Using openconnect client in docker mode..."
-                return 0
-            elif [[ "$OCCLIENT_TYPE" == "host" ]]; then
-                echo "Using openconnect client in host mode..."
-                return 1
-            fi
+            return 0
         else
             echo "Some OCCLIENT_ variables is not defined"
             return 1
