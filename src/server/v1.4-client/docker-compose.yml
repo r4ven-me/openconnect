@@ -12,7 +12,7 @@ services:
   #     TZ: ${TZ}
   #   hostname: certbot
   #   volumes:
-  #     - ./data/ocserv/ssl:/etc/letsencrypt
+  #     - ./data/ssl:/etc/letsencrypt
   #   entrypoint: >
   #     sh -c "
   #       certbot certonly --non-interactive --keep-until-expiring --standalone --preferred-challenges http --agree-tos --email ${USER_EMAIL} -d ${SRV_CN}; exit 0;
@@ -39,9 +39,7 @@ services:
     env_file:
       - .env
     volumes:
-      - ./data/ocserv/:/etc/ocserv
-      # - ./data/occlient/:/etc/openconnect/
-      # - ./data/dnsmasq/:/etc/dnsmasq.d/
+      - ./data/:/etc/ocserv
       # - /etc/iproute2/rt_tables:/etc/iproute2/rt_tables
       #- /etc/passwd:/etc/passwd:ro
       #- /etc/group:/etc/group:ro
@@ -67,7 +65,7 @@ services:
   #     TZ: ${TZ}
   #   hostname: certbot-renew
   #   volumes:
-  #     - ./data/ocserv/ssl:/etc/letsencrypt
+  #     - ./data/ssl:/etc/letsencrypt
   #   entrypoint: >
   #     sh -c "
   #       trap exit TERM;
